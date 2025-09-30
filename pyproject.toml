@@ -1,52 +1,83 @@
 [build-system]
-requires = ["setuptools >= 50", "wheel", "setuptools_scm[toml] >= 6"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools_scm]
-# this is used populated when creating a git archive
-# and when there is .git dir and/or there is no git installed
-fallback_version = "9999.$Format:%h-%cs$"
+[project]
+name = "card-sdk"
+version = "0.1.0"
+description = "CARD dataset SDK with Rerun visualization and loaders."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "CARD Team" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Typing :: Typed",
+]
+
+# ↓ Floors chosen to keep ABI happy on 3.12; loosen if you need older envs.
+dependencies = [
+  "attrs>=25.3.0",
+  "laspy>=2.5.4",
+  "lazrs>=0.6.2",
+  "numpy>=2.2,<3",                 # keep major-2 ABI
+  "opencv-python>=4.11.0.86",
+  "pillow>=11.1.0",
+  "pyarrow>=19.0.1",
+  "rerun-sdk>=0.23.2",
+  "scipy>=1.15,<2",
+  "typing_extensions>=4.12.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "black>=24.8",
+  "mypy>=1.11",
+  "build>=1.2.2",
+  "twine>=5.1",
+  "pre-commit>=3.7",
+]
+
+[project.scripts]
+# `card-viz <DATASET_DIR> [--flags]`
+card-viz = "card_sdk.cli:main"
+
+[project.urls]
+Homepage = "https://example.com/card-sdk"
+Repository = "https://example.com/card-sdk/repo"
+Issues = "https://example.com/card-sdk/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["card_sdk*"]
+
+# --- Lint & type-check (optional but CI-friendly) ---
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+lint.select = ["E","F","I","UP","B"]
+exclude = ["docs", "scripts"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_configs = true
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-norecursedirs = [
-   ".git",
-   "bin",
-   "dist",
-   "build",
-   "_build",
-   "dist",
-   "etc",
-   "local",
-   "ci",
-   "docs",
-   "man",
-   "share",
-   "samples",
-   ".cache",
-   ".settings",
-   "Include",
-   "include",
-   "Lib",
-   "lib",
-   "lib64",
-   "Lib64",
-   "Scripts",
-   "thirdparty",
-   "tmp",
-   "venv",
-   "tests/data",
-   ".eggs",
-   "src/*/data",
-   "tests/*/data"
-]
-
-python_files = "*.py"
-
-python_classes = "Test"
-python_functions = "test"
-
-addopts = [
-    "-rfExXw",
-    "--strict-markers",
-    "--doctest-modules"
-]
+minversion = "8.0"
+addopts = "-q"
+pythonpath = ["src"]
