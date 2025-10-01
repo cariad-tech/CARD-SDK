@@ -490,3 +490,31 @@ def run_viz(
             send_agg_depth_flag=send_agg_depth_flag,
             base_dir=base_dir,
         )
+
+
+
+# --- CLI wrapper (keep it tiny) ---
+def cli_main():
+    import argparse
+    from rerun_vis import run_viz
+
+    p = argparse.ArgumentParser("card-viz")
+    p.add_argument("dataset_dir", type=str)
+    p.add_argument("--subsample-cam", type=int, default=1)
+    p.add_argument("--send-laser-intensities", action="store_true")
+    p.add_argument("--stereo-matching", action="store_true")
+    p.add_argument("--load-dense-depth", action="store_true")
+    p.add_argument("--send-agg-depth-flag", action="store_true")
+    args = p.parse_args()
+
+    run_viz(
+        base_dir=args.dataset_dir,
+        subsample_cam=args.subsample_cam,
+        send_laser_intensities=args.send_laser_intensities,
+        stereo_matching=args.stereo_matching,
+        load_dense_depth=args.load_dense_depth,
+        send_agg_depth_flag=args.send_agg_depth_flag,
+    )
+
+if __name__ == "__main__":
+    cli_main()
