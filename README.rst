@@ -6,85 +6,128 @@ This repo provides both quick visualization utilities (via `Rerun <https://rerun
 
 ---
 
-🚀 Quick Start
---------------
+⚡ Quick Visualization
+----------------------
 
-1. Visualization with Rerun
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+You have two ways to quickly launch the visualizer:
 
-The easiest way to explore the dataset is with the built-in **Rerun visualizer**.
+1. Run the script directly::
 
-Run::
+      python scripts/vis.py <sequence_path> --send_agg_depth
 
-   python scripts/vis.py <path_to_seq> [options]
+2. Or, after installation, use the CLI entrypoint::
 
-Options:
+      card-viz -h
 
-- ``--send_agg_depth`` → visualize aggregated dense **ground-truth depth**
-- ``--send_dense_depth`` → log exported **predicted dense depth** (from any depth module)
-- ``--send_lidar_intensities`` → visualize LiDAR intensity channels
-- ``--camera_subsample <N>`` → log every N-th image (for faster previews)
-
-💡 Combine options to quickly inspect different modalities.
+This opens the Rerun visualizer and shows the dataset with options like ``--send-agg-depth`` or ``--send-lidar-intensities``.
 
 Example::
 
-   python scripts/vis.py /media/T7/CARD/sequences/seq01 --send_agg_depth --camera_subsample 10
-
-This will show:
-
-- Left/right cameras
-- Aggregated ground-truth depth (projected into the images)
-- Optional LiDAR / predicted depths
-
-.. image:: path/to/example_rerun.png
-   :alt: Example Rerun Screenshot
-   :align: center
+   python scripts/vis.py /media/T7/CARD/sequences/seq01 --send_agg_depth
 
 ---
 
-2. Using the Data Loader
-~~~~~~~~~~~~~~~~~~~~~~~~~
+🚀 Installation
+---------------
+
+Clone the repository and install it in editable/development mode::
+
+   git clone https://github.com/your-org/CARD-SDK.git
+   cd CARD-SDK
+   pip install -e .
+
+This makes the ``card_dataset`` package and the ``card-viz`` command available system-wide.
+
+---
+
+🔧 Using the Data Loader
+------------------------
 
 The SDK includes a **unified PyTorch dataset** for CARD.
 
-Install with::
-
-   pip install -e .[torch]
-
-Usage example::
+Example::
 
    from card_dataset import UnifiedCardDataset
 
    ds = UnifiedCardDataset(
-       root="/media/T7/CARD/",
-       split="train",
-       include_context=True,   # load +/- context frames
-       include_poses=True,     # return relative poses
+       base_root="/media/T7/CARD/",
+       split_file="train_split.txt",
+       context_offsets=(-1, 0, +1),   # load ±1 context frames
+       stereo=True,                   # load stereo pairs
    )
 
    sample = ds[0]
    print(sample.keys())
-   # -> ['image_left', 'image_right', 'agg_depth', 'pose', 'pose_context', ...]
+   # -> ['meta', 'cam_1', 'cam_0', ...]
+
+Each frame dictionary includes:
+
+- **RGB** (normalized tensor)
+- **Sparse LiDAR depth**
+- **Aggregated dense depth**
+- **Camera intrinsics** (K, distortion coeffs)
+- **Poses & relative poses**
+- **Context frames** if requested
+- **Optional YOLO labels**
 
 ---
 
-3. Checking Loader Correctness
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+🎥 Visualization Scripts
+------------------------
 
-A minimal visualization is provided to check intrinsics, projections, and pose correctness:
+All visualization/testing utilities are located in ``scripts/``.
 
-Run::
+1. Rerun Visualizer
+~~~~~~~~~~~~~~~~~~~
 
-   python card_dataset/viz_sample.py <path_to_seq>
+Explore sequences interactively with `Rerun <https://rerun.io>`_::
+
+   python scripts/vis_dataloader.py \
+       --base_root "/media/T7/CARD/" \
+       --split_file "val_all_data_clean.txt" \
+       --idx 8465 \
+       --send-agg-depth \
+       --send-lidar-intensities
+
+Options:
+
+- ``--send-agg-depth`` → visualize aggregated dense ground-truth depth
+- ``--send-dense-depth`` → log predicted dense depth (if available)
+- ``--send-lidar-intensities`` → visualize LiDAR intensity channels
+- ``--camera-subsample <N>`` → log every N-th image (faster previews)
+
+This will open a Rerun session with:
+
+- Left/right camera streams
+- Depth overlays
+- Optional LiDAR & dense depth
+- Full trajectory + sensor poses
+
+.. image:: docs/example_rerun.png
+   :alt: Example Rerun Screenshot
+   :align: center
+
+2. Loader Sanity Check
+~~~~~~~~~~~~~~~~~~~~~~
+
+A simpler visualization is provided to **check intrinsics, projections, and pose correctness**::
+
+   python scripts/viz_sample.py \
+       --base_root "/media/T7/CARD/" \
+       --split_file "val_all_data_clean.txt" \
+       --idx 8465
 
 This script will:
 
-- Show the **agg_depth** projected into one image
+- Show the ``agg_depth`` overlay on the center RGB
 - Re-project the depth into a **neighbor frame** (using relative pose)
 - Verify consistency visually
 
-.. image:: path/to/example_projection.png
+Quick run example::
+
+   python scripts/viz_sample.py --base_root "/media/T7/CARD/" --split_file "val_all_data_clean.txt" --idx 100
+
+.. image:: docs/example_projection.png
    :alt: Projection Correctness
    :align: center
 
@@ -93,10 +136,10 @@ This script will:
 📦 Features
 -----------
 
-- 🔗 **Unified Dataset Loader** → Returns camera images, aggregated depth, LiDAR, poses, context images  
+- 🔗 **Unified Dataset Loader** → Returns images, sparse/agg depth, LiDAR, poses, context images  
 - 🎥 **Context Support** → Load ±N frames (with relative poses)  
-- 🖼️ **Visualizer** → Rerun-based, real-time, highly interactive  
-- 📊 **Depth Checks** → Simple scripts to validate projections & camera intrinsics  
+- 🖼️ **Visualizer** → Rerun-based, real-time, interactive exploration  
+- 📊 **Depth Checks** → Scripts to validate projections & intrinsics  
 - ⚡ **Torch-ready** → Plug-and-play ``torch.utils.data.Dataset``  
 
 ---
@@ -106,15 +149,17 @@ This script will:
 
 .. code-block:: text
 
-   card-sdk/
+   CARD-SDK/
    │
    ├── card_dataset/
-   │   ├── dataloader.py      # Unified PyTorch dataset
-   │   ├── viz_sample.py      # Sample visualization for depth/pose checks
+   │   ├── __init__.py          # Package entry
+   │   ├── dataloader.py        # Unified PyTorch dataset
+   │   ├── torch_augs.py        # Torch-only augmentations
    │   └── ...
    │
    ├── scripts/
-   │   ├── vis.py             # Main Rerun visualizer
+   │   ├── vis_dataloader.py    # Rerun visualizer
+   │   ├── viz_sample.py        # Loader sanity checker
    │   └── ...
    │
    └── README.rst
@@ -127,15 +172,15 @@ This script will:
 Rerun Visualizer
 ~~~~~~~~~~~~~~~~
 
-.. image:: path/to/example_rerun.png
+.. image:: docs/example_rerun.png
    :alt: Example Rerun
    :align: center
 
 Projection Correctness
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. image:: path/to/example_projection.png
-   :alt: Projection correctness
+.. image:: docs/example_projection.png
+   :alt: Projection Correctness
    :align: center
 
 ---
@@ -150,4 +195,4 @@ Feel free to open issues / PRs for improvements or integration with new depth mo
 📜 License
 ----------
 
-MIT License. See LICENSE for details.
+MIT License. See ``LICENSE`` for details.
