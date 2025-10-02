@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools", "wheel"]           # ← no hard pin; avoids the error
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "card-sdk"
-version = "0.1.0"
-description = "CARD dataset SDK with Rerun visualization."
+version = "0.1.1"  # ← bump
+description = "CARD dataset SDK with Rerun visualization and a unified PyTorch dataloader."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
@@ -20,7 +20,7 @@ dependencies = [
   "attrs>=25.3.0",
   "laspy>=2.5.4",
   "lazrs>=0.6.2",
-  "numpy>=2.2,<3",
+  "numpy>=1.26,<3",            # allow both NumPy 1.26 and 2.x
   "opencv-python>=4.11.0.86",
   "pillow>=11.1.0",
   "pyarrow>=19.0.1",
@@ -29,9 +29,19 @@ dependencies = [
   "typing_extensions>=4.12.2",
 ]
 
+[project.optional-dependencies]
+torch = [
+  "torch>=2.4",
+  "torchvision>=0.19",
+]
+viz = ["matplotlib>=3.9"]
+
 [project.scripts]
-card-viz = "rerun_vis:cli_main"              # ← maps to src/rerun_vis.py
+card-viz = "rerun_vis:cli_main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-py-modules = ["rerun_vis"]                    # ← single module package
+py-modules = ["rerun_vis"]
+
+[tool.setuptools.packages.find]
+where = ["src", "card_dataset"]

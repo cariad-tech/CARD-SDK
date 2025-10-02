@@ -15,9 +15,6 @@ def _cmd_viz(args):
 def main():
     p = argparse.ArgumentParser("card")
     sub = p.add_subparsers(dest="cmd", required=True)
-
-    # ... (your other subcommands)
-
     p_viz = sub.add_parser("viz", help="Open a Rerun session and visualize a CARD sequence.")
     p_viz.add_argument("--dir", required=True, help="Path to the dataset base directory")
     p_viz.add_argument("--subsample-cam", type=int, default=1)

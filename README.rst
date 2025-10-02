@@ -1,62 +1,153 @@
-A Simple Python Project Skeleton
-================================
-This repo attempts to standardize the structure of the Python-based project's
-repositories using modern Python packaging and configuration techniques.
-Using this `blog post`_ as inspiration, this repository serves as the base for
-all new Python projects and is mergeable in existing repositories as well.
+CARD-SDK
+========
 
-.. _blog post: https://blog.jaraco.com/a-project-skeleton-for-python-projects/
+A unified SDK for loading, visualizing, and experimenting with the **CARD Dataset**.  
+This repo provides both quick visualization utilities (via `Rerun <https://rerun.io>`_) and a flexible PyTorch dataloader for training & evaluation.
 
+---
 
-Usage
-=====
+🚀 Quick Start
+--------------
 
-A brand new project
+1. Visualization with Rerun
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The easiest way to explore the dataset is with the built-in **Rerun visualizer**.
+
+Run::
+
+   python scripts/vis.py <path_to_seq> [options]
+
+Options:
+
+- ``--send_agg_depth`` → visualize aggregated dense **ground-truth depth**
+- ``--send_dense_depth`` → log exported **predicted dense depth** (from any depth module)
+- ``--send_lidar_intensities`` → visualize LiDAR intensity channels
+- ``--camera_subsample <N>`` → log every N-th image (for faster previews)
+
+💡 Combine options to quickly inspect different modalities.
+
+Example::
+
+   python scripts/vis.py /media/T7/CARD/sequences/seq01 --send_agg_depth --camera_subsample 10
+
+This will show:
+
+- Left/right cameras
+- Aggregated ground-truth depth (projected into the images)
+- Optional LiDAR / predicted depths
+
+.. image:: path/to/example_rerun.png
+   :alt: Example Rerun Screenshot
+   :align: center
+
+---
+
+2. Using the Data Loader
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The SDK includes a **unified PyTorch dataset** for CARD.
+
+Install with::
+
+   pip install -e .[torch]
+
+Usage example::
+
+   from card_dataset import UnifiedCardDataset
+
+   ds = UnifiedCardDataset(
+       root="/media/T7/CARD/",
+       split="train",
+       include_context=True,   # load +/- context frames
+       include_poses=True,     # return relative poses
+   )
+
+   sample = ds[0]
+   print(sample.keys())
+   # -> ['image_left', 'image_right', 'agg_depth', 'pose', 'pose_context', ...]
+
+---
+
+3. Checking Loader Correctness
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A minimal visualization is provided to check intrinsics, projections, and pose correctness:
+
+Run::
+
+   python card_dataset/viz_sample.py <path_to_seq>
+
+This script will:
+
+- Show the **agg_depth** projected into one image
+- Re-project the depth into a **neighbor frame** (using relative pose)
+- Verify consistency visually
+
+.. image:: path/to/example_projection.png
+   :alt: Projection Correctness
+   :align: center
+
+---
+
+📦 Features
+-----------
+
+- 🔗 **Unified Dataset Loader** → Returns camera images, aggregated depth, LiDAR, poses, context images  
+- 🎥 **Context Support** → Load ±N frames (with relative poses)  
+- 🖼️ **Visualizer** → Rerun-based, real-time, highly interactive  
+- 📊 **Depth Checks** → Simple scripts to validate projections & camera intrinsics  
+- ⚡ **Torch-ready** → Plug-and-play ``torch.utils.data.Dataset``  
+
+---
+
+📂 Repo Structure
+-----------------
+
+.. code-block:: text
+
+   card-sdk/
+   │
+   ├── card_dataset/
+   │   ├── dataloader.py      # Unified PyTorch dataset
+   │   ├── viz_sample.py      # Sample visualization for depth/pose checks
+   │   └── ...
+   │
+   ├── scripts/
+   │   ├── vis.py             # Main Rerun visualizer
+   │   └── ...
+   │
+   └── README.rst
+
+---
+
+🖼️ Example Outputs
 -------------------
-.. code-block:: bash
 
-    git init my-new-repo
-    cd my-new-repo
-    git pull git@github.com:nexB/skeleton
+Rerun Visualizer
+~~~~~~~~~~~~~~~~
 
-    # Create the new repo on GitHub, then update your remote
-    git remote set-url origin git@github.com:nexB/your-new-repo.git
+.. image:: path/to/example_rerun.png
+   :alt: Example Rerun
+   :align: center
 
-From here, you can make the appropriate changes to the files for your specific project.
+Projection Correctness
+~~~~~~~~~~~~~~~~~~~~~~
 
-Update an existing project
----------------------------
-.. code-block:: bash
+.. image:: path/to/example_projection.png
+   :alt: Projection correctness
+   :align: center
 
-    cd my-existing-project
-    git remote add skeleton git@github.com:nexB/skeleton
-    git fetch skeleton
-    git merge skeleton/main --allow-unrelated-histories
+---
 
-This is also the workflow to use when updating the skeleton files in any given repository.
+🤝 Contributing
+---------------
 
-More usage instructions can be found in ``docs/skeleton-usage.rst``.
+Feel free to open issues / PRs for improvements or integration with new depth modules.
 
+---
 
-Release Notes
-=============
+📜 License
+----------
 
-- 2023-07-18:
-    - Add macOS-13 job in azure-pipelines.yml
-
-- 2022-03-04:
-    - Synchronize configure and configure.bat scripts for sanity
-    - Update CI operating system support with latest Azure OS images
-    - Streamline utility scripts in etc/scripts/ to create, fetch and manage third-party dependencies
-      There are now fewer scripts. See etc/scripts/README.rst for details
-
-- 2021-09-03:
-    - ``configure`` now requires pinned dependencies via the use of ``requirements.txt`` and ``requirements-dev.txt``
-    - ``configure`` can now accept multiple options at once
-    - Add utility scripts from scancode-toolkit/etc/release/ for use in generating project files
-    - Rename virtual environment directory from ``tmp`` to ``venv``
-    - Update README.rst with instructions for generating ``requirements.txt`` and ``requirements-dev.txt``,
-      as well as collecting dependencies as wheels and generating ABOUT files for them.
-
-- 2021-05-11:
-    - Adopt new configure scripts from ScanCode TK that allows correct configuration of which Python version is used.
+MIT License. See LICENSE for details.

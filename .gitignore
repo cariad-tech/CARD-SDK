@@ -23,7 +23,7 @@
 /share/
 /tcl/
 /.eggs/
-
+scripts/Final_stats
 # Installer logs
 pip-log.txt
 

@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation, Slerp
 
-import torch_augs as augs  # <— use the pytorch-only augs
+from . import torch_augs as augs
 
 
 # ---------- pose utilities ----------
@@ -196,6 +196,42 @@ class UnifiedCardDataset(Dataset):
         T_cam_rig = self._T_cam_to_rig_from_traj(traj, cam)
         return T_rig_world @ T_cam_rig
 
+    # >>> NEW: relative extrinsics (time-invariant, sensor-to-sensor)
+    @staticmethod
+    def _relative_cam_extrinsics(traj: Dict, cam_a: str, cam_b: str) -> Tuple[np.ndarray, np.ndarray]:
+        """Return R_ab, t_ab such that X_b = R_ab * X_a + t_ab (both cameras expressed in rig-fixed calibration)."""
+        T_a_rig = UnifiedCardDataset._T_cam_to_rig_from_traj(traj, cam_a)
+        T_b_rig = UnifiedCardDataset._T_cam_to_rig_from_traj(traj, cam_b)
+        T_ab = inv_SE3(T_a_rig) @ T_b_rig
+        R_ab = T_ab[:3,:3].astype(np.float32)
+        t_ab = T_ab[:3, 3].astype(np.float32)
+        return R_ab, t_ab
+
+    # >>> NEW: rectification params computed from calibration (original image geometry)
+    @staticmethod
+    def _stereo_rectify_params(traj: Dict, cam_left: str, cam_right: str):
+        ci_l = traj["camera_infos"][cam_left]
+        ci_r = traj["camera_infos"][cam_right]
+        K_l, dist_l = UnifiedCardDataset._K_dist_from_traj(traj, cam_left)
+        K_r, dist_r = UnifiedCardDataset._K_dist_from_traj(traj, cam_right)
+        R_lr, t_lr = UnifiedCardDataset._relative_cam_extrinsics(traj, cam_left, cam_right)
+        image_size = (int(ci_l["image_width"]), int(ci_l["image_height"]))
+        R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(K_l, dist_l, K_r, dist_r, image_size, R_lr, t_lr, flags=cv2.CALIB_ZERO_DISPARITY)
+        return {
+            "K_left": K_l.astype(np.float32),
+            "K_right": K_r.astype(np.float32),
+            "dist_left": dist_l.astype(np.float32),
+            "dist_right": dist_r.astype(np.float32),
+            "R_left": R1.astype(np.float32),
+            "R_right": R2.astype(np.float32),
+            "P_left": P1.astype(np.float32),
+            "P_right": P2.astype(np.float32),
+            "Q": Q.astype(np.float32),
+            "R_lr": R_lr.astype(np.float32),
+            "t_lr": t_lr.astype(np.float32),
+            "image_size": np.array(image_size, np.int32),
+        }
+
     # ----- cam dir index per sequence -----
     def _cam_dir_list(self, seq_root: Path, cam: str) -> List[Tuple[int,str]]:
         key = (str(seq_root), cam)
@@ -250,6 +286,48 @@ class UnifiedCardDataset(Dataset):
             m = cv2.resize(self.bumper_mask, (W, H), interpolation=cv2.INTER_NEAREST)
             dep = dep * m
         return _clip_min(dep)
+
+    # >>> NEW: single LiDAR sparse scan (robust path/key probing)
+    def _load_single_lidar_sparse(self, seq_root: Path, cam: str, ts: int, K: np.ndarray, H: int, W: int):
+        """
+        Tries several conventional locations to find a per-frame sparse LiDAR scan aligned to a camera.
+        Returns (depth_map [H,W], pts_cam [N,3] or None).
+        """
+        # candidate folders (add more aliases if you use other names)
+        roots = [
+            seq_root / "single_lidar" / cam,
+            seq_root / "lidar_single" / cam,
+            seq_root / "sparse_lidar" / cam,
+            seq_root / "lidar_sparse" / cam,
+            seq_root / "lidar" / "single" / cam,
+        ]
+        npz = None
+        for r in roots:
+            p = r / f"{cam}_{ts}.npz"
+            if p.is_file():
+                npz = p; break
+        if npz is None: 
+            return None, None
+
+        z = np.load(str(npz), allow_pickle=True)
+        pts = z.get("pts_cam", None)
+        dep = z.get("depth", None)
+
+        pts_cam = None
+        if isinstance(pts, np.ndarray):
+            pts_cam = pts.astype(np.float32)
+
+        if dep is None:
+            if pts_cam is not None:
+                dep = _project_pts_to_depth(pts_cam, K, (H, W))
+            else:
+                return None, pts_cam  # nothing to project
+
+        dep = dep.astype(np.float32)
+        if self.bumper_mask is not None:
+            m = cv2.resize(self.bumper_mask, (W, H), interpolation=cv2.INTER_NEAREST)
+            dep = dep * m
+        return _clip_min(dep), pts_cam
 
     def _load_labels(self, seq_root: Path, cam: str, ts: int, img_path: str):
         p = seq_root / "labels" / f"{cam}_{ts}.txt"
@@ -369,12 +447,18 @@ class UnifiedCardDataset(Dataset):
                 sparse_c = self._load_sparse(seq_root, cam_name, ts_c)
                 single_c = self._load_single(seq_root, cam_name, ts_c, K0, H0, W0)
                 agg_c    = self._load_agg(seq_root, cam_name, ts_c, K0, H0, W0)
+
+                # >>> NEW: single LiDAR sparse scan (depth + optional raw pts)
+                lidar_single_depth_c, lidar_single_pts_c = self._load_single_lidar_sparse(seq_root, cam_name, ts_c, K0, H0, W0)
+
                 labels_c = self._load_labels(seq_root, cam_name, ts_c, path_c)
 
                 depth_like = {}
                 if sparse_c is not None: depth_like["sparse"] = sparse_c
                 if single_c is not None: depth_like["depth_single"] = single_c
                 if agg_c is not None:    depth_like["depth_agg"] = agg_c
+                if lidar_single_depth_c is not None: depth_like["lidar_single_sparse"] = lidar_single_depth_c  # >>> NEW
+
                 rgb_cc, dcts, Kc = self._apply_augs_and_crop(rgb_c, depth_like, K0)
 
                 # gate for train on center sparse
@@ -387,6 +471,10 @@ class UnifiedCardDataset(Dataset):
                     "lidar_sparse": _chw(dcts.get("sparse", None)),
                     "depth_single": _chw(dcts.get("depth_single", None)),
                     "depth_agg":    _chw(dcts.get("depth_agg", None)),
+                    # >>> NEW: projected single-LiDAR sparse depth (augmented/cropped)
+                    "lidar_single_sparse": _chw(dcts.get("lidar_single_sparse", None)),
+                    # >>> NEW: raw single-LiDAR points in camera frame (not augmented/cropped)
+                    "lidar_single_pts_cam": torch.from_numpy(lidar_single_pts_c.astype(np.float32)) if lidar_single_pts_c is not None else None,
                     "K": torch.from_numpy(Kc.astype(np.float32)) if Kc is not None else None,
                     "dist": torch.from_numpy(dist0.astype(np.float32)),
                     "T_cam_world": torch.from_numpy(Tcw_c.astype(np.float32)),
@@ -406,8 +494,14 @@ class UnifiedCardDataset(Dataset):
 
                     Tcw_n = self._T_cam_world(traj, cam_name, ts_n)
                     sparse_n = self._load_sparse(seq_root, cam_name, ts_n)
+
+                    # >>> NEW: single-LiDAR sparse for neighbors (depth only; points omitted to save memory)
+                    lidar_single_depth_n, _ = self._load_single_lidar_sparse(seq_root, cam_name, ts_n, K0, Hn, Wn)
+
                     depth_like_n = {}
                     if sparse_n is not None: depth_like_n["sparse"] = sparse_n
+                    if lidar_single_depth_n is not None: depth_like_n["lidar_single_sparse"] = lidar_single_depth_n  # >>> NEW
+
                     rgb_nc, dcts_n, Kn = self._apply_augs_and_crop(rgb_n, depth_like_n, K0)
 
                     frames[off] = {
@@ -415,6 +509,9 @@ class UnifiedCardDataset(Dataset):
                         "rgb": _chw(_normalize(rgb_nc, self.rgb_mean, self.rgb_std)),
                         "lidar_sparse": _chw(dcts_n.get("sparse", None)),
                         "depth_single": None, "depth_agg": None,
+                        # >>> NEW:
+                        "lidar_single_sparse": _chw(dcts_n.get("lidar_single_sparse", None)),
+                        "lidar_single_pts_cam": None,
                         "K": torch.from_numpy(Kn.astype(np.float32)) if Kn is not None else None,
                         "dist": torch.from_numpy(dist0.astype(np.float32)),
                         "T_cam_world": torch.from_numpy(Tcw_n.astype(np.float32)),
@@ -467,9 +564,40 @@ class UnifiedCardDataset(Dataset):
                     other_payload = build_cam_payload(other_cam, best)
                     if other_payload is not None:
                         out[other_cam] = other_payload
+                        # >>> NEW: attach stereo relative pose & rectification params
+                        # Use the canonical left/right ordering:
+                        left = self.CAM_LEFT; right = self.CAM_RIGHT
+                        if (left in out) and (right in out) and (out[left] is not None) and (out[right] is not None):
+                            stereo_info = self._stereo_rectify_params(traj, left, right)
+                            R_lr = stereo_info["R_lr"]; t_lr = stereo_info["t_lr"]
+                            baseline_m = float(np.linalg.norm(t_lr))
+
+                            out["stereo"] = {
+                                "left_cam": left,
+                                "right_cam": right,
+                                "R_right_from_left": torch.from_numpy(R_lr),
+                                "t_right_from_left": torch.from_numpy(t_lr),
+                                "baseline_m": baseline_m,
+                                "rectification": {
+                                    "K_left": torch.from_numpy(stereo_info["K_left"]),
+                                    "K_right": torch.from_numpy(stereo_info["K_right"]),
+                                    "dist_left": torch.from_numpy(stereo_info["dist_left"]),
+                                    "dist_right": torch.from_numpy(stereo_info["dist_right"]),
+                                    "R_left": torch.from_numpy(stereo_info["R_left"]),
+                                    "R_right": torch.from_numpy(stereo_info["R_right"]),
+                                    "P_left": torch.from_numpy(stereo_info["P_left"]),
+                                    "P_right": torch.from_numpy(stereo_info["P_right"]),
+                                    "Q": torch.from_numpy(stereo_info["Q"]),
+                                    "image_size": torch.from_numpy(stereo_info["image_size"]),
+                                },
+                            }
+                        else:
+                            out["stereo"] = None
                     else:
                         out[other_cam] = None
+                        out["stereo"] = None
                 else:
                     out[other_cam] = None
+                    out["stereo"] = None
 
             return out
