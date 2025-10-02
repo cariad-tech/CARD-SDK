@@ -32,7 +32,7 @@ Example::
 
 Clone the repository and install it in editable/development mode::
 
-   git clone https://github.com/your-org/CARD-SDK.git
+   git clone https://github.com/xx/CARD-SDK.git
    cd CARD-SDK
    pip install -e .
 
@@ -82,13 +82,15 @@ All visualization/testing utilities are located in ``scripts/``.
 
 Explore sequences interactively with `Rerun <https://rerun.io>`_::
 
-   python scripts/vis_dataloader.py \
-       --base_root "/media/T7/CARD/" \
-       --split_file "val_all_data_clean.txt" \
-       --idx 8465 \
-       --send-agg-depth \
-       --send-lidar-intensities
+   python -m scripts.vis \
+      "<-seq-path>" \
+      [--send-agg-depth] [--send-dense-depth] [--send-lidar-intensities] [--camera-subsample <N>]
 
+or (if repo is installed)::
+
+   card-viz "<-seq-path>" [options]
+
+Where ``<seq-path>`` is the path to a CARD sequence (e.g., ``/path/to/full_data/x/seq01``).
 Options:
 
 - ``--send-agg-depth`` → visualize aggregated dense ground-truth depth
@@ -112,20 +114,13 @@ This will open a Rerun session with:
 
 A simpler visualization is provided to **check intrinsics, projections, and pose correctness**::
 
-   python scripts/viz_sample.py \
-       --base_root "/media/T7/CARD/" \
-       --split_file "val_all_data_clean.txt" \
-       --idx 8465
+python -m scripts.viz_dataloader --base_root <base-root-path> --split_file <split-path> --idx 11230
 
 This script will:
 
 - Show the ``agg_depth`` overlay on the center RGB
 - Re-project the depth into a **neighbor frame** (using relative pose)
 - Verify consistency visually
-
-Quick run example::
-
-   python scripts/viz_sample.py --base_root "/media/T7/CARD/" --split_file "val_all_data_clean.txt" --idx 100
 
 .. image:: docs/example_projection.png
    :alt: Projection Correctness
@@ -158,10 +153,12 @@ Quick run example::
    │   └── ...
    │
    ├── scripts/
-   │   ├── vis_dataloader.py    # Rerun visualizer
-   │   ├── viz_sample.py        # Loader sanity checker
+   │   ├── viz_dataloader.py    # Rerun visualizer
+   │   ├── vis.py               # Thin Rerun launcher
    │   └── ...
-   │
+   ├── src/
+   │   ├── cli.py               # CLI entrypoint
+   │   └── rerun_vis.py       # Rerun visualizer logic
    └── README.rst
 
 ---
@@ -185,14 +182,3 @@ Projection Correctness
 
 ---
 
-🤝 Contributing
----------------
-
-Feel free to open issues / PRs for improvements or integration with new depth modules.
-
----
-
-📜 License
-----------
-
-MIT License. See ``LICENSE`` for details.
