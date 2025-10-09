@@ -7,6 +7,153 @@ from collections import defaultdict
 from pathlib import Path
 from scipy.spatial.transform import Rotation, Slerp
 from rerun.archetypes.series_lines import SeriesLines
+class _Timeline:
+    def __init__(self):
+        self.t0_us = None
+        self.i = -1  # frame index
+
+    def advance(self, t_us: int):
+        t_us = int(t_us)
+        if self.t0_us is None:
+            self.t0_us = t_us
+        self.i += 1
+        # Primary deterministic playback axis (sequence index)
+        rr.set_time("frame", sequence=int(self.i))
+        # Normalized sensor time in seconds since first sample
+        rr.set_time("sensor_time", duration=(t_us - self.t0_us) / 1e6)
+
+
+
+def compute_road_plane_from_wheels(traj_data, vehicle_pose):
+    """Compute road plane from wheel ground contact points.
+    
+    The wheel ground contact points in sensor_to_trajectory_poses are static vehicle-relative positions
+    that define where the wheels touch the ground relative to the vehicle body.
+    
+    Returns:
+        plane_normal: Normal vector to the ground plane in vehicle local coordinates
+        plane_point: A point on the ground plane in vehicle local coordinates
+    """
+    # Get wheel ground contact positions (these are vehicle-relative, not world positions)
+    wheel_ground_keys = [
+        "cariad_wheel_FL_Ground",
+        "cariad_wheel_FR_Ground", 
+        "cariad_wheel_RL_Ground",
+        "cariad_wheel_RR_Ground"
+    ]
+    
+    wheel_points_vehicle = []
+    for wheel_key in wheel_ground_keys:
+        if wheel_key in traj_data["sensor_to_trajectory_poses"]:
+            wheel_pose = traj_data["sensor_to_trajectory_poses"][wheel_key]
+            # These are already in vehicle coordinates - they represent fixed offsets from vehicle center
+            wheel_point = np.array([wheel_pose[0], wheel_pose[1], wheel_pose[2]])
+            wheel_points_vehicle.append(wheel_point)
+            print(f"  {wheel_key} (vehicle coords): {wheel_point}")
+    
+    if len(wheel_points_vehicle) < 3:
+        print(f"Warning: Only {len(wheel_points_vehicle)} wheel contact points found, using default plane")
+        return np.array([0, 0, 1]), np.array([0, 0, -1.8])  # Default: horizontal plane 1.8m below vehicle
+    
+    wheel_points_vehicle = np.array(wheel_points_vehicle)
+    
+    # Fit a plane through the wheel contact points in vehicle coordinates
+    # Use SVD to find the best-fit plane
+    centroid_vehicle = np.mean(wheel_points_vehicle, axis=0)
+    points_centered = wheel_points_vehicle - centroid_vehicle
+    
+    # SVD to find the plane normal (smallest singular vector)
+    _, _, vh = np.linalg.svd(points_centered)
+    normal_vehicle = vh[-1]  # Last row of V^T is the normal vector with smallest singular value
+    
+    # Ensure normal points "up" (positive z component in vehicle coordinates)
+    if normal_vehicle[2] < 0:
+        normal_vehicle = -normal_vehicle
+    
+    print(f"Ground plane in vehicle coords: normal={normal_vehicle}, centroid={centroid_vehicle}")
+    print(f"Ground plane centroid z={centroid_vehicle[2]:.3f}m (distance below vehicle center)")
+    
+    return normal_vehicle, centroid_vehicle
+
+def get_height_colors(points, vehicle_pose, road_plane_normal, road_plane_point, start_height_offset=-0.7, end_height_offset=0.0):
+    """Generate colors based on height relative to road plane using plasma colormap.
+    
+    Args:
+        points: Point cloud data in world coordinates
+        vehicle_pose: Reference vehicle pose [x, y, z, qw, qx, qy, qz] in world coordinates
+        road_plane_normal: Normal vector to the road plane in vehicle local coordinates
+        road_plane_point: A point on the road plane in vehicle local coordinates
+        start_height_offset: Lower bound offset from road plane (default: -0.7m below road)
+        end_height_offset: Upper bound offset from road plane (default: 0.0m at road level)
+    """
+    # Transform points to vehicle's local coordinate system
+    T_world_to_vehicle = np.linalg.inv(pose_to_matrix(*vehicle_pose))
+    points_homogeneous = np.c_[points, np.ones(len(points))]  # Add homogeneous coordinate
+    points_vehicle_local = (T_world_to_vehicle @ points_homogeneous.T).T[:, :3]
+    
+    # Calculate distance from each point to the road plane
+    # Distance = |normal · (point - plane_point)| / |normal|
+    # Since we want signed distance (positive above plane), we don't use absolute value
+    plane_normal_normalized = road_plane_normal / np.linalg.norm(road_plane_normal)
+    
+    # Vector from plane point to each point
+    point_to_plane_vectors = points_vehicle_local - road_plane_point
+    
+    # Signed distance to plane (positive = above road, negative = below road)
+    distances_to_plane = np.dot(point_to_plane_vectors, plane_normal_normalized)
+    
+    # Calculate absolute range based on road plane
+    start_height = start_height_offset
+    end_height = end_height_offset
+    
+    # Initialize color array
+    colors = np.zeros((len(points), 3), dtype=np.uint8)
+
+    # Calculate range for normalization
+    height_range = end_height - start_height
+    
+    # Dynamic masks based on distance from road plane
+    mask_detailed = (distances_to_plane >= start_height) & (distances_to_plane <= end_height)
+    mask_higher = distances_to_plane > end_height
+    mask_lower = distances_to_plane < start_height
+
+    # Colors for points in the specified range (using true plasma colormap)
+    if np.any(mask_detailed):
+        # Normalize to 0-1 range for the specified window
+        norm_heights = (distances_to_plane[mask_detailed] - start_height) / height_range
+        
+        # True plasma colormap implementation
+        # Based on matplotlib's plasma colormap values
+        colors[mask_detailed] = np.column_stack([
+            # Red channel: starts very low, increases dramatically after 0.5
+            np.clip(255 * (0.05 + 0.95 * np.power(norm_heights, 0.5)), 0, 255).astype(np.uint8),
+            # Green channel: S-curve, peaks around 0.8-0.9
+            np.clip(255 * np.power(norm_heights, 1.5), 0, 255).astype(np.uint8),
+            # Blue channel: starts high (purple), decreases to create the plasma effect
+            np.clip(255 * (0.95 - 0.9 * np.power(norm_heights, 0.8)), 0, 255).astype(np.uint8)
+        ])
+
+    # Colors for points above the range (simple gray gradient to de-emphasize)
+    if np.any(mask_higher):
+        # Normalize for points above the range (up to 3m above the road plane)
+        norm_heights = np.clip((distances_to_plane[mask_higher] - end_height) / 3.0, 0, 1)
+        gray_value = (180 + 75 * (1 - norm_heights)).astype(np.uint8)  # Light gray gradient
+        colors[mask_higher] = np.column_stack([
+            gray_value,
+            gray_value, 
+            gray_value
+        ])
+    
+    # Colors for points below the range (very dark to make them almost invisible)
+    if np.any(mask_lower):
+        colors[mask_lower] = np.column_stack([
+            np.full(np.sum(mask_lower), 20, dtype=np.uint8),  # Very dark
+            np.full(np.sum(mask_lower), 20, dtype=np.uint8),
+            np.full(np.sum(mask_lower), 30, dtype=np.uint8)   # Slightly blue tint
+        ])
+    
+    return colors
+
 
 # --- constants you had ---
 cam_left = "cam_1"
@@ -211,7 +358,6 @@ def rr_send_cam_frame(timestamp, cam_name, camera_info, cam_frame_path,
                       image_plane_distance=0.1))
     rr.log(f"world/rig/{cam_name}/undistorted_image",
            rr.Image(undistorted, color_model="BGR").compress(jpeg_quality=75))
-
     if labels_root:
         labels_dir = os.path.join(labels_root, "labels")
         bboxes = read_yolo_bboxes(cam_frame_path, labels_dir)
@@ -335,31 +481,68 @@ def stereo_rectification(traj_data, left, right):
 
 def visualize_laz(file_path, traj_data, image_buffer, send_laser_intensities,
                   perform_stereo_matching=False, labels_root=None,
-                  load_dense_depth=False, send_agg_depth_flag=False, base_dir=None):
+                  load_dense_depth=False, send_agg_depth_flag=False, base_dir=None,
+                  accumulate_points=False, color_by_height=False, time_start=None, time_end=None,
+                  height_range=(-0.5, 0.5), timeline=None):
     index = json.load(open(file_path + ".index.json"))["entries"]
     index.sort(key=lambda e: e["end_ts"])
     if any(e["part_index"] != 0 for e in index):
         raise RuntimeError("Multipart LAZ not supported yet.")
+    
+    # Process all entries without time filtering
+    filtered_index = index
+    print(f"Processing all {len(filtered_index)} entries")
+
+    # Dictionaries to store accumulated points and their timestamps for each lidar
+    accumulated_points = {}
+    accumulated_colors = {}
+    accumulated_timestamps = {}
+    ACCUMULATION_WINDOW = 8.0  # 8 seconds window
+
+    # Get the first vehicle pose as fixed reference for height coloring
+    reference_vehicle_pose = None
+    road_plane_normal = None
+    road_plane_point = None
+    if color_by_height and filtered_index:
+        first_entry_ts = filtered_index[0]["end_ts"]
+        reference_vehicle_pose = interpolate_pose(traj_data, first_entry_ts)
+        
+        # Compute road plane from wheel contact points at reference position
+        road_plane_normal, road_plane_point = compute_road_plane_from_wheels(traj_data, reference_vehicle_pose)
+        
+        print(f"Using fixed reference vehicle pose from timestamp {first_entry_ts/1e6:.2f}s")
+        print(f"Reference vehicle pose: {reference_vehicle_pose}")
+        print(f"Final road plane normal (vehicle coords): {road_plane_normal}")
+        print(f"Final road plane point (vehicle coords): {road_plane_point}")
 
     with laspy.open(file_path) as las:
         las.seek(0)
-        for entry in index:
+        for entry in filtered_index:  # Use filtered_index instead of index
             las.seek(entry["point_offset_in_file"])
             points = las.read_points(entry["num_pts"])
             coords = np.vstack((points.x, points.y, points.z)).T
             colors = None
-            if send_laser_intensities and hasattr(points, 'intensity'):
+            
+            end_ts = entry["end_ts"]
+            if color_by_height and reference_vehicle_pose is not None and road_plane_normal is not None:
+                # Use fixed reference vehicle pose and road plane for stable ground reference
+                # Color points relative to the computed GROUND PLANE from wheel contact points
+                # Height offsets are relative to the ground plane:
+                # -0.5m = 50cm below ground (underground) = dark purple
+                # +0.5m = 50cm above ground (speed bumps, obstacles) = bright yellow
+                colors = get_height_colors(coords, reference_vehicle_pose, road_plane_normal, road_plane_point,
+                                         start_height_offset=height_range[0], end_height_offset=height_range[1])
+            elif send_laser_intensities and hasattr(points, 'intensity'):
                 intens = points.intensity / 65535.0
                 colors = np.vstack((intens, intens, intens)).T
 
-            end_ts = entry["end_ts"]
             images = image_buffer.get_images_up_to(end_ts)
 
             for timestamp, cam_name, cam_frame_path in images:
                 camera_info = traj_data['camera_infos'][cam_name]
                 rr_send_cam_frame(timestamp + camera_info['timestamp_offset'],
                                   cam_name, camera_info, cam_frame_path,
-                                  labels_root=base_dir,  # assumes labels inside base_dir/img/<cam>/../../labels
+                                  labels_root=base_dir,
                                   send_agg_depth_flag=send_agg_depth_flag,
                                   base_dir=base_dir, traj_data=traj_data)
                 if load_dense_depth:
@@ -376,7 +559,40 @@ def visualize_laz(file_path, traj_data, image_buffer, send_laser_intensities,
                         stereo_rectification(traj_data, cams[cam_left], cams[cam_right])
 
             rr.set_time("sensor_time", duration=end_ts/1e6)
-            rr.log("world/" + entry["laser_name"], rr.Points3D(coords, colors=colors, radii=-1))
+            
+            # Handle point accumulation
+            laser_name = entry["laser_name"]
+            current_time = end_ts / 1e6  # Convert to seconds
+            
+            if accumulate_points:
+                if laser_name not in accumulated_points:
+                    accumulated_points[laser_name] = coords
+                    accumulated_colors[laser_name] = colors if colors is not None else None
+                    accumulated_timestamps[laser_name] = np.full(len(coords), current_time)
+                else:
+                    # Remove points older than the window
+                    mask = (current_time - accumulated_timestamps[laser_name]) <= ACCUMULATION_WINDOW
+                    accumulated_points[laser_name] = accumulated_points[laser_name][mask]
+                    if accumulated_colors[laser_name] is not None:
+                        accumulated_colors[laser_name] = accumulated_colors[laser_name][mask]
+                    accumulated_timestamps[laser_name] = accumulated_timestamps[laser_name][mask]
+                    
+                    # Add new points
+                    accumulated_points[laser_name] = np.vstack((accumulated_points[laser_name], coords))
+                    if colors is not None:
+                        accumulated_colors[laser_name] = np.vstack((accumulated_colors[laser_name], colors))
+                    accumulated_timestamps[laser_name] = np.append(accumulated_timestamps[laser_name], 
+                                                                  np.full(len(coords), current_time))
+                
+                # Visualize accumulated points
+                rr.log("world/" + laser_name, rr.Points3D(
+                    accumulated_points[laser_name],
+                    colors=accumulated_colors[laser_name],
+                    radii=-1
+                ))
+            else:
+                # Visualize only current points
+                rr.log("world/" + laser_name, rr.Points3D(coords, colors=colors, radii=-1))
 
 # ----------------- PUBLIC ENTRYPOINT -----------------
 def run_viz(
@@ -386,9 +602,14 @@ def run_viz(
     stereo_matching: bool = False,
     load_dense_depth: bool = False,
     send_agg_depth_flag: bool = False,
+    accumulate_points: bool = False,
+    color_by_height: bool = False,
+    time_start: float = None,
+    time_end: float = None,
+    height_range: tuple = (-0.5, 0.5),
 ):
     rr.init("Data Vis", spawn=True)
-
+    #timeline = _Timeline()
     wheel_excitement_path = os.path.join(base_dir, "export/wheel_excitement.json")
     has_wheel_excitement = os.path.isfile(wheel_excitement_path)
 
@@ -489,6 +710,11 @@ def run_viz(
             load_dense_depth=load_dense_depth,
             send_agg_depth_flag=send_agg_depth_flag,
             base_dir=base_dir,
+            accumulate_points=accumulate_points,
+            color_by_height=color_by_height,
+            time_start=time_start,
+            time_end=time_end,
+            height_range=height_range,
         )
 
 
@@ -505,6 +731,12 @@ def cli_main():
     p.add_argument("--stereo-matching", action="store_true")
     p.add_argument("--load-dense-depth", action="store_true")
     p.add_argument("--send-agg-depth-flag", action="store_true")
+    p.add_argument("--accumulate-points", action="store_true", help="Accumulate lidar points over time")
+    p.add_argument("--color-by-height", action="store_true", help="Color points by height relative to ground plane from wheel contact points")
+    p.add_argument("--time-start", type=float, help="Start time in seconds for processing (optional)")
+    p.add_argument("--time-end", type=float, help="End time in seconds for processing (optional)")
+    p.add_argument("--height-range", nargs=2, type=float, default=[0.0, 0.5], 
+                   help="Height range relative to ground plane [min_height max_height] in meters (default: 0.0 0.5)")
     args = p.parse_args()
 
     run_viz(
@@ -514,6 +746,11 @@ def cli_main():
         stereo_matching=args.stereo_matching,
         load_dense_depth=args.load_dense_depth,
         send_agg_depth_flag=args.send_agg_depth_flag,
+        accumulate_points=args.accumulate_points,
+        color_by_height=args.color_by_height,
+        time_start=args.time_start,
+        time_end=args.time_end,
+        height_range=tuple(args.height_range),
     )
 
 if __name__ == "__main__":

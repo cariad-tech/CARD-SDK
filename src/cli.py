@@ -10,6 +10,7 @@ def _cmd_viz(args):
         stereo_matching=args.stereo_matching,
         load_dense_depth=args.load_dense_depth,
         send_agg_depth=args.send_agg_depth,
+        accumulate_points=args.accumulate_points,
     )
 
 def main():
@@ -22,6 +23,12 @@ def main():
     p_viz.add_argument("--stereo-matching", action="store_true")
     p_viz.add_argument("--load-dense-depth", action="store_true")
     p_viz.add_argument("--send-agg-depth", action="store_true")
+    p_viz.add_argument("--accumulate-points", action="store_true", help="Accumulate points over time for better visualization.")
+    p.add_argument("--color-by-height", action="store_true", help="Color points by height relative to ground plane from wheel contact points")
+    p.add_argument("--time-start", type=float, help="Start time in seconds for processing (optional)")
+    p.add_argument("--time-end", type=float, help="End time in seconds for processing (optional)")
+    p.add_argument("--height-range", nargs=2, type=float, default=[0.0, 0.5], 
+                   help="Height range relative to ground plane [min_height max_height] in meters (default: 0.0 0.5)")
     p_viz.set_defaults(func=_cmd_viz)
 
     args = p.parse_args()
