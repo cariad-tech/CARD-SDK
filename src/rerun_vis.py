@@ -7,22 +7,6 @@ from collections import defaultdict
 from pathlib import Path
 from scipy.spatial.transform import Rotation, Slerp
 from rerun.archetypes.series_lines import SeriesLines
-class _Timeline:
-    def __init__(self):
-        self.t0_us = None
-        self.i = -1  # frame index
-
-    def advance(self, t_us: int):
-        t_us = int(t_us)
-        if self.t0_us is None:
-            self.t0_us = t_us
-        self.i += 1
-        # Primary deterministic playback axis (sequence index)
-        rr.set_time("frame", sequence=int(self.i))
-        # Normalized sensor time in seconds since first sample
-        rr.set_time("sensor_time", duration=(t_us - self.t0_us) / 1e6)
-
-
 
 def compute_road_plane_from_wheels(traj_data, vehicle_pose):
     """Compute road plane from wheel ground contact points.
@@ -483,7 +467,7 @@ def visualize_laz(file_path, traj_data, image_buffer, send_laser_intensities,
                   perform_stereo_matching=False, labels_root=None,
                   load_dense_depth=False, send_agg_depth_flag=False, base_dir=None,
                   accumulate_points=False, color_by_height=False, time_start=None, time_end=None,
-                  height_range=(-0.5, 0.5), timeline=None):
+                  height_range=(-0.5, 0.5)):
     index = json.load(open(file_path + ".index.json"))["entries"]
     index.sort(key=lambda e: e["end_ts"])
     if any(e["part_index"] != 0 for e in index):
@@ -609,7 +593,6 @@ def run_viz(
     height_range: tuple = (-0.5, 0.5),
 ):
     rr.init("Data Vis", spawn=True)
-    #timeline = _Timeline()
     wheel_excitement_path = os.path.join(base_dir, "export/wheel_excitement.json")
     has_wheel_excitement = os.path.isfile(wheel_excitement_path)
 
