@@ -8,8 +8,6 @@
 /build
 /bin
 /lib
-/scripts
-/Scripts
 /Lib
 /pip-selfcheck.json
 /tmp
@@ -24,6 +22,7 @@
 /tcl/
 /.eggs/
 scripts/Final_stats
+scripts/road_images
 # Installer logs
 pip-log.txt
 
