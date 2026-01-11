@@ -1,14 +1,35 @@
-# card_dataset/scripts/viz_sample.py
-# Example:
-# python -m card_dataset.scripts.viz_sample \
-#   --base_root "/media/T7/x dataset" \
-#   --split_file "val_all_data_clean.txt" \
-#   --idx 8465 \
-#   --out_dir "./viz_out"
+#!/usr/bin/env python3
+"""
+Comprehensive CARD Dataset Dataloader Visualization
+
+VISUALIZATION: Uses UnifiedCardDataset.for_visualization() 
+for instant initialization and fast single-sample examination.
+
+Features:
+- RGB images with bounding box annotations
+- Depth maps (sparse LiDAR, single-frame, aggregated)  
+- Stereo pairs and rectification
+- Temporal neighbor frames
+- Ground plane computation from wheels
+- Performance timing
+
+Usage Examples:
+# Fast visualization
+python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0
+
+# Minimal (fastest)  
+python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0 \
+  --no_labels --no_neighbors --skip_projections
+
+# Full features with ground plane
+python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0 \
+  --load_ground_plane
+"""
 
 import argparse, os, sys, numpy as np, torch, cv2
 from pathlib import Path
 from card_dataset.dataloader import UnifiedCardDataset
+from collections import defaultdict
 
 
 def _ensure_dir(p: Path):
@@ -88,6 +109,40 @@ def draw_pts(img, uv, m, color=(0, 255, 0), r=1):
     return out
 
 
+def draw_bboxes(img, labels, color=(255, 255, 0), thickness=2):
+    """Draw bounding boxes on image.
+    
+    Args:
+        img: RGB image array (H, W, 3)
+        labels: List of dicts with 'class' and 'bbox' (x1, y1, x2, y2) keys
+        color: RGB color tuple for bounding box
+        thickness: Line thickness
+    
+    Returns:
+        Image with bounding boxes drawn
+    """
+    if labels is None or len(labels) == 0:
+        return img
+    
+    out = img.copy()
+    for label in labels:
+        class_id = label['class']
+        x1, y1, x2, y2 = label['bbox']
+        
+        # Draw bounding box
+        cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
+        
+        # Draw class label
+        text = f"Class {class_id}"
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        cv2.rectangle(out, (int(x1), int(y1) - text_size[1] - 5), 
+                      (int(x1) + text_size[0], int(y1)), color, -1)
+        cv2.putText(out, text, (int(x1), int(y1) - 5), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    
+    return out
+
+
 def _get_neighbor_frames(frames_dict):
     """Return (minus1, plus1) frame dicts or None if missing."""
     f_m1 = frames_dict.get(-1, None)
@@ -107,6 +162,7 @@ def _do_projection_bundle(
     frames,  # dict: { -1: {...}, 0:{...}, +1:{...} }
     stereo_payload,  # dict or None
     mean_vec, std_vec,
+    center_labels=None,  # bounding box labels for center frame
 ):
     """
     Project a given source (agg or sparse) from center@t into:
@@ -119,10 +175,15 @@ def _do_projection_bundle(
     root = out_root / tag
     _ensure_dir(root)
 
-    # 1) Visualize source on center
-    cm0 = depth_to_colormap(source_depth_chw)
-    over0 = overlay(rgb0, cm0, 0.6)
-    _save_png(root / "t_center_overlay.png", over0)
+    # # 1) Visualize source on center
+    # cm0 = depth_to_colormap(source_depth_chw)
+    # over0 = overlay(rgb0, cm0, 0.6)
+    
+    # # Add bounding boxes to overlay if available
+    # if center_labels is not None and len(center_labels) > 0:
+    #     over0 = draw_bboxes(over0, center_labels)
+    
+    # _save_png(root / "t_center_overlay.png", over0)
 
     # 2) Backproject source@t -> 3D (center camera)
     pts_c, _ = backproject(source_depth_chw, torch.from_numpy(K0))
@@ -137,9 +198,14 @@ def _do_projection_bundle(
     Pc0 = transform(Pw, Twc0)
     uv0, m0 = project(Pc0, K0, rgb0.shape)
     rgb0_pts = draw_pts(rgb0, uv0, m0, (0, 255, 0), 1)
+    
+    # Add bounding boxes to reprojection
+    if center_labels is not None and len(center_labels) > 0:
+        rgb0_pts = draw_bboxes(rgb0_pts, center_labels)
+    
     _save_png(root / "t_center_reproj_from_t.png", rgb0_pts)
 
-    # 4) Reproject to neighbors
+    # 4) Reproject to neighbors (if available)
     f_m1, f_p1 = _get_neighbor_frames(frames)
     if f_m1 is not None and f_m1.get("rgb") is not None:
         rgb_m1 = chw_to_hwc_uint8(f_m1["rgb"], mean_vec, std_vec)
@@ -157,48 +223,75 @@ def _do_projection_bundle(
         uvp1, mp1 = project(Pcp1, Kp1, rgb_p1.shape)
         _save_png(root / "t+1_reproj_from_t.png", draw_pts(rgb_p1, uvp1, mp1, (255, 0, 200), 1))
 
-    # 5) Reproject to stereo mate (if present)
-    if stereo_payload is not None:
-        left = stereo_payload.get("left_cam")
-        right = stereo_payload.get("right_cam")
-        # Which one is "other" relative to our current center?
-        # We'll just try both keys in the top-level item; only one will exist.
-        # The caller passes the partner cam's payload via `item[other_cam]`.
-        # Here we infer from frames: they belong to the current cam only,
-        # so we need the other cam directly from the item dict (caller provides in args).
-        # Instead, the caller will pass `stereo_partner_frame0` here for simplicity.
-
-    # (Handled by caller separately for clarity.)
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Comprehensive CARD Dataset Dataloader Visualization")
     ap.add_argument("--base_root", required=True, type=str,
                     help="Dataset root folder (sequence roots and export live under here)")
     ap.add_argument("--split_file", required=True, type=str,
                     help="Split file (relative to base_root or absolute)")
-    ap.add_argument("--idx", type=int, default=0)
-    ap.add_argument("--out_dir", type=str, default="./viz_out")
-    ap.add_argument("--h", type=int, default=352)
-    ap.add_argument("--w", type=int, default=1216)
-    ap.add_argument("--no_stereo", action="store_true", help="Disable stereo pairing even if available")
+    ap.add_argument("--idx", type=int, default=0,
+                    help="Sample index to visualize")
+    ap.add_argument("--out_dir", type=str, default="./viz_out",
+                    help="Output directory for visualizations")
+    
+    # Image parameters
+    ap.add_argument("--h", type=int, default=1000,
+                    help="Target image height")
+    ap.add_argument("--w", type=int, default=1216,
+                    help="Target image width")
+    
+    # Dataset efficiency flags
+    ap.add_argument("--no_stereo", action="store_true", 
+                    help="Disable stereo pairing even if available")
+    ap.add_argument("--no_labels", action="store_true", 
+                    help="Disable loading labels for efficiency")
+    ap.add_argument("--no_neighbors", action="store_true", 
+                    help="Disable loading neighbor frames for efficiency")
+    ap.add_argument("--load_ground_plane", action="store_true", 
+                    help="Load ground plane information from wheel contact points")
+    
+    # Visualization options
+    ap.add_argument("--skip_projections", action="store_true",
+                    help="Skip depth projection visualizations (faster)")
+    ap.add_argument("--depth_range", nargs=2, type=float, default=[0.1, 60.0],
+                    help="Depth visualization range [min max] in meters")
+    
     args = ap.parse_args()
 
-    # Allow absolute or relative split path
     split_path = Path(args.split_file)
     if not split_path.is_absolute():
         split_path = Path(args.base_root) / args.split_file
 
-    ds = UnifiedCardDataset(
+    print("[info] Creating visualization-optimized dataset:")
+    print(f"  Image size: {args.w}x{args.h}")
+    print(f"  Labels: {'disabled' if args.no_labels else 'enabled'}")
+    print(f"  Neighbors: {'disabled' if args.no_neighbors else 'enabled'}")
+    print(f"  Stereo: {'disabled' if args.no_stereo else 'enabled'}")
+    print(f"  Ground plane: {'enabled' if args.load_ground_plane else 'disabled'}")
+    
+    import time
+    start_time = time.time()
+    
+    ds = UnifiedCardDataset.for_inference(
         base_root=args.base_root,
         split_file=str(split_path.relative_to(args.base_root)) if str(split_path).startswith(str(Path(args.base_root))) else str(split_path),
-        mode="val",
         height=args.h, width=args.w,
-        context_offsets=(-1, 0, +1),
+        load_labels=not args.no_labels,
+        load_neighbors=not args.no_neighbors,
+        load_ground_plane_info=args.load_ground_plane,
         stereo=not args.no_stereo,
-        use_color_aug=False, use_geom_aug=False
+        context_offsets=(-1, 0, +1) if not args.no_neighbors else (0,),
     )
+    
+    init_time = time.time() - start_time
+    print(f"[info] Dataset initialized in {init_time:.2f}s")
 
+    print(f"[info] Loading sample {args.idx}...")
+    load_start = time.time()
     item = ds[args.idx]
+    load_time = time.time() - load_start
+    print(f"[info] Sample loaded in {load_time:.2f}s")
     center_cam = item["meta"]["center_cam"]
     center_frames = item[center_cam]["frames"]
 
@@ -213,92 +306,183 @@ def main():
 
     out_dir = Path(args.out_dir)
     _ensure_dir(out_dir)
-
-    # ---------- A) Projections using AGG depth (if available) ----------
-    if f0.get("depth_agg") is not None:
-        _do_projection_bundle(
-            tag="out_agg",
-            out_root=out_dir,
-            rgb0=rgb0, K0=K0, Tcw0=Tcw0,
-            source_depth_chw=f0["depth_agg"],
-            frames=center_frames,
-            stereo_payload=item.get("stereo", None),
-            mean_vec=mean, std_vec=std,
-        )
+    
+    # ---------- Basic visualizations ----------
+    print("[info] Saving basic visualizations...")
+    
+    # Save plain center image
+    _save_png(out_dir / "center_rgb.png", rgb0)
+    
+    # ---------- Bounding box visualization ----------
+    labels = f0.get("labels", None)
+    if labels is not None and len(labels) > 0:
+        rgb0_with_bboxes = draw_bboxes(rgb0, labels)
+        _save_png(out_dir / "center_with_bboxes.png", rgb0_with_bboxes)
+        print(f"[info] Found {len(labels)} bounding boxes in center frame")
+        
+        # Save bounding box details
+        with open(out_dir / "bboxes_info.txt", "w") as f:
+            f.write(f"Bounding Boxes Information\n")
+            f.write(f"==========================\n")
+            f.write(f"Total bounding boxes: {len(labels)}\n")
+            f.write(f"Image dimensions: {rgb0.shape[1]}x{rgb0.shape[0]} (WxH)\n\n")
+            for i, label in enumerate(labels):
+                x1, y1, x2, y2 = label['bbox']
+                width = x2 - x1
+                height = y2 - y1
+                f.write(f"Box {i+1}:\n")
+                f.write(f"  Class: {label['class']}\n")
+                f.write(f"  Coordinates: ({x1}, {y1}) to ({x2}, {y2})\n")
+                f.write(f"  Size: {width}x{height} pixels\n\n")
     else:
-        print("[info] No depth_agg at t — skipping agg projections.")
-
-    # ---------- B) Projections using SPARSE depth ----------
-    # Prefer lidar_single_sparse (projected single LiDAR), else lidar_sparse (GT sparse)
-    sparse_src = None
-    src_name = None
-    if f0.get("lidar_single_sparse") is not None:
-        sparse_src = f0["lidar_single_sparse"]
-        src_name = "lidar_single_sparse"
-    elif f0.get("lidar_sparse") is not None:
-        sparse_src = f0["lidar_sparse"]
-        src_name = "lidar_sparse"
-
-    if sparse_src is not None:
-        _do_projection_bundle(
-            tag="out_sparse",
-            out_root=out_dir,
-            rgb0=rgb0, K0=K0, Tcw0=Tcw0,
-            source_depth_chw=sparse_src,
-            frames=center_frames,
-            stereo_payload=item.get("stereo", None),
-            mean_vec=mean, std_vec=std,
-        )
+        print("[info] No bounding boxes found in center frame")
+    
+    # ---------- Ground plane information ----------
+    if 'ground_plane' in item[center_cam]:
+        gp = item[center_cam]['ground_plane']
+        print(f"[info] Ground plane information available:")
+        print(f"  Plane normal (world coords): {gp['plane_normal_world']}")
+        print(f"  Plane point (world coords): {gp['plane_point_world']}")
+        print(f"  Camera height above ground: {gp['camera_height_above_ground']:.3f}m")
+        print(f"  Number of wheel points: {gp['wheel_points_world'].shape[0]}")
+        
+        # Save ground plane info to text file
+        with open(out_dir / "ground_plane_info.txt", "w") as f:
+            f.write(f"Ground Plane Information\n")
+            f.write(f"========================\n")
+            f.write(f"Computed from wheel ground contact points at timestamp {gp['timestamp_us']}\n\n")
+            f.write(f"Plane normal (world coords): {gp['plane_normal_world']}\n")
+            f.write(f"Plane point (world coords): {gp['plane_point_world']}\n") 
+            f.write(f"Camera height above ground: {gp['camera_height_above_ground']:.6f} meters\n\n")
+            f.write(f"Wheel ground contact points (world coords):\n")
+            wheel_names = ["FL (Front Left)", "FR (Front Right)", "RL (Rear Left)", "RR (Rear Right)"]
+            for i, point in enumerate(gp['wheel_points_world']):
+                wheel_name = wheel_names[i] if i < len(wheel_names) else f"Wheel {i+1}"
+                f.write(f"  {wheel_name}: ({point[0]:.6f}, {point[1]:.6f}, {point[2]:.6f})\n")
     else:
-        print("[info] No sparse depth at t — skipping sparse projections.")
-
-    # ---------- C) Stereo reprojection to the partner camera ----------
-    # If stereo pairing exists, reproject source depth to the partner cam at its t
-    stereo = item.get("stereo", None)
-    if stereo is not None:
-        # identify partner cam payload
-        other_cam = None
-        if UnifiedCardDataset.CAM_LEFT in item and UnifiedCardDataset.CAM_RIGHT in item:
-            # if we have both cams in the item, choose the *other* one
-            other_cam = UnifiedCardDataset.CAM_RIGHT if center_cam == UnifiedCardDataset.CAM_LEFT else UnifiedCardDataset.CAM_LEFT
-        elif UnifiedCardDataset.CAM_LEFT in item:
-            other_cam = UnifiedCardDataset.CAM_LEFT if center_cam != UnifiedCardDataset.CAM_LEFT else None
-        elif UnifiedCardDataset.CAM_RIGHT in item:
-            other_cam = UnifiedCardDataset.CAM_RIGHT if center_cam != UnifiedCardDataset.CAM_RIGHT else None
-
-        if other_cam is not None and item.get(other_cam) is not None:
-            other_frames = item[other_cam]["frames"]
-            if 0 in other_frames and other_frames[0] is not None:
-                f_other0 = other_frames[0]
-                rgb_o = chw_to_hwc_uint8(f_other0["rgb"], mean, std)
-                Ko = f_other0["K"].numpy()
-                Tcwo = f_other0["T_cam_world"].numpy()
-                Twco = np.linalg.inv(Tcwo)
-
-                # If we already backprojected once, reuse AGG if present, else SPARSE if present.
-                # Re-run backprojection to keep code clean:
-                def reproject_source(tag_name: str, depth_src):
-                    root = Path(args.out_dir) / tag_name
-                    _ensure_dir(root)
-                    pts_c, _ = backproject(depth_src, torch.from_numpy(K0))
-                    if pts_c.shape[0] == 0:
-                        return
-                    Pw = transform(pts_c, Tcw0)   # center@t -> world
-                    Pco = transform(Pw, Twco)     # world -> other cam
-                    uvo, mo = project(Pco, Ko, rgb_o.shape)
-                    _save_png(root / "stereo_partner_reproj_from_t.png",
-                              draw_pts(rgb_o, uvo, mo, (0, 180, 255), 1))
-
-                if f0.get("depth_agg") is not None:
-                    reproject_source("out_agg", f0["depth_agg"])
-                if sparse_src is not None:
-                    reproject_source("out_sparse", sparse_src)
+        print("[info] Ground plane information not available (use --load_ground_plane to enable)")
+    
+    # ---------- Neighbor frames information ----------
+    neighbor_count = len([k for k in center_frames.keys() if k != 0])
+    print(f"[info] Loaded {neighbor_count} neighbor frames")
+    
+    if neighbor_count > 0:
+        with open(out_dir / "neighbor_frames_info.txt", "w") as f:
+            f.write(f"Neighbor Frames Information\n")
+            f.write(f"===========================\n")
+            f.write(f"Total neighbor frames: {neighbor_count}\n")
+            f.write(f"Available frame offsets: {list(center_frames.keys())}\n\n")
+            for offset, frame in center_frames.items():
+                if offset != 0:
+                    f.write(f"Frame at offset {offset:+d}:\n")
+                    f.write(f"  Timestamp: {frame['timestamp_us']} microseconds\n")
+                    f.write(f"  RGB shape: {frame['rgb'].shape}\n")
+                    f.write(f"  Has labels: {frame.get('labels') is not None}\n\n")
+    
+    # ---------- Stereo information ----------
+    if not args.no_stereo and "stereo" in item and item["stereo"] is not None:
+        stereo_info = item["stereo"]
+        print(f"[info] Stereo pairing available:")
+        print(f"  Left camera: {stereo_info['left_cam']}")
+        print(f"  Right camera: {stereo_info['right_cam']}")
+        print(f"  Baseline: {stereo_info['baseline_m']:.3f}m")
+        
+        with open(out_dir / "stereo_info.txt", "w") as f:
+            f.write(f"Stereo Configuration\n")
+            f.write(f"====================\n")
+            f.write(f"Left camera: {stereo_info['left_cam']}\n")
+            f.write(f"Right camera: {stereo_info['right_cam']}\n")
+            f.write(f"Baseline: {stereo_info['baseline_m']:.6f} meters\n\n")
+            f.write(f"Relative transformation (right from left):\n")
+            f.write(f"Rotation matrix:\n{stereo_info['R_right_from_left']}\n\n")
+            f.write(f"Translation vector:\n{stereo_info['t_right_from_left']}\n")
+    else:
+        print("[info] No stereo pairing available")
+    
+    # ---------- Depth projection visualizations ----------
+    if not args.skip_projections:
+        print("[info] Creating depth projection visualizations...")
+        
+        vmin, vmax = args.depth_range
+        
+        # A) Projections using AGG depth (if available)
+        if f0.get("depth_agg") is not None:
+            print("  - Processing aggregated depth...")
+            _do_projection_bundle(
+                tag="out_agg",
+                out_root=out_dir,
+                rgb0=rgb0, K0=K0, Tcw0=Tcw0,
+                source_depth_chw=f0["depth_agg"],
+                frames=center_frames,
+                stereo_payload=item.get("stereo", None),
+                mean_vec=mean, std_vec=std,
+                center_labels=labels,
+            )
         else:
-            print("[info] Stereo enabled but no partner camera payload for this sample.")
-    else:
-        print("[info] Stereo pairing not present for this sample (or disabled).")
+            print("  - No aggregated depth available")
 
-    print(f"[done] Wrote results under: {out_dir.resolve()}")
+        # B) Projections using SPARSE depth (prefer single scan over accumulated)
+        sparse_src = None
+        src_name = None
+        if f0.get("lidar_single_sparse") is not None:
+            sparse_src = f0["lidar_single_sparse"]
+            src_name = "lidar_single_sparse (single LiDAR scan)"
+        elif f0.get("lidar_sparse") is not None:
+            sparse_src = f0["lidar_sparse"]
+            src_name = "lidar_sparse (accumulated ground truth - may show multiple scans)"
+            print("    WARNING: Using accumulated sparse ground truth instead of single scan")
+            print("    This may show accumulated points from multiple LiDAR scans rather than a single scan")
+
+        if sparse_src is not None:
+            print(f"  - Processing {src_name}...")
+            _do_projection_bundle(
+                tag="out_sparse",
+                out_root=out_dir,
+                rgb0=rgb0, K0=K0, Tcw0=Tcw0,
+                source_depth_chw=sparse_src,
+                frames=center_frames,
+                stereo_payload=item.get("stereo", None),
+                mean_vec=mean, std_vec=std,
+                center_labels=labels,
+            )
+        else:
+            print("  - No sparse depth available")
+    else:
+        print("[info] Skipping depth projection visualizations (--skip_projections)")
+    
+    # ---------- Summary ----------
+    print(f"\n[summary] Dataset loading summary:")
+    print(f"  Sample index: {args.idx}")
+    print(f"  Center camera: {center_cam}")
+    print(f"  Image dimensions: {args.w}x{args.h}")
+    print(f"  Labels: {'enabled' if not args.no_labels else 'disabled'} ({len(labels) if labels else 0} found)")
+    print(f"  Neighbors: {'enabled' if not args.no_neighbors else 'disabled'} ({neighbor_count} loaded)")
+    print(f"  Ground plane: {'enabled' if args.load_ground_plane else 'disabled'}")
+    print(f"  Stereo: {'enabled' if not args.no_stereo else 'disabled'}")
+    print(f"  Available depth types: {[k for k in f0.keys() if 'depth' in k or 'sparse' in k]}")
+
+    print(f"\n[done] Wrote results under: {out_dir.resolve()}")
 
 if __name__ == "__main__":
     main()
+
+
+# python -m scripts.viz_dataloader   --base_root "<path to data root>"   --split_file "val_all_data_clean.txt"   --idx 68 --load_ground_plane
+
+#     # Full comprehensive visualization (all features)
+# python -m scripts.viz_dataloader \
+#   --base_root "<path to data root>" \
+#   --split_file "val.txt" \
+#   --idx 6268 --load_ground_plane
+
+# # Fast minimal visualization (center image only)
+# python -m scripts.viz_dataloader \
+#   --base_root "<path to data root>" \
+#   --split_file "val.txt" \
+#   --idx 6268 --no_labels --no_neighbors --no_stereo --skip_projections
+
+# # Custom configuration
+# python -m scripts.viz_dataloader \
+#   --base_root "<path to data root>" \
+#   --split_file "val.txt" \
+#   --idx 6268 --load_ground_plane --skip_projections --h 480 --w 640
