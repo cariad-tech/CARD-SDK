@@ -25,7 +25,7 @@ scripts/Final_stats
 scripts/road_images
 # Installer logs
 pip-log.txt
-
+my_demo.ipynb
 # Unit test / coverage reports
 .cache
 .coverage
