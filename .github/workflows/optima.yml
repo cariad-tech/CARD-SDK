@@ -16,7 +16,7 @@ jobs:
           toolstation-token: ${{ secrets.OPTIMA_TOKEN }}
           github-token: ${{ secrets.OPTIMA_GITHUB_TOKEN }}
           jfrog-user: ${{ secrets.OPTIMA_JFROG_USER }}
-          jfrog-token: ${{ secrets.NEW_OPTIMA_JFROG_TOKEN }}
+          jfrog-token: ${{ secrets.OPTIMA_JFROG_TOKEN }}
           
           snippet-scan: 'false'
           client-only: 'false'
