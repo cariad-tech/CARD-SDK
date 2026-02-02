@@ -5,8 +5,6 @@
 
 
 </div>
-
-
 <div align="center">
 Welcome to the SDK of CARD, which is a driving dataset dedicated to the worse road topographies that are rarely recorded, such as speed bumps, potholes, and off-road conditions. This repo is the toolkit designed for easy access, loading, and visualization of the CARD dataset. This repository provides the essential tools to get you started:
 </div>
