@@ -20,10 +20,10 @@ ROAD_PLANE_POINT = None
 def compute_road_plane_from_wheels(traj_data, vehicle_pose):
     """Compute road plane from wheel ground contact points (vehicle frame)."""
     wheel_ground_keys = [
-        "wheel_FL_Ground",
-        "wheel_FR_Ground",
-        "wheel_RL_Ground",
-        "wheel_RR_Ground",
+        "cariad_wheel_FL_Ground",
+        "cariad_wheel_FR_Ground",
+        "cariad_wheel_RL_Ground",
+        "cariad_wheel_RR_Ground",
     ]
 
     wheel_points_vehicle = []

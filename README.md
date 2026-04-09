@@ -24,24 +24,31 @@ src/rerun_vis.py (installed as card-viz): The primary interactive 3D visualizer 
 
 scripts/viz_dataloader.py: A helper script to visualize and verify the raw output directly from the dataloader.
 
-## 🚀 Getting Started
+## 🚀 Installation
 
-### Quick Start (SDK)
+This SDK is optimized for use with the [uv](https://docs.astral.sh/uv/) package manager.
 
-1. Use Python 3.10–3.12 (recommended).
-2. Create and activate a virtual environment:
-	```bash
-	python3 -m venv .venv
-	source .venv/bin/activate
-	```
-3. Install the SDK so the `card-viz` command is available:
-	```bash
-	pip install .
-	# Optional extras for dataloader and plotting:
-	# pip install .[torch,viz]
-	```
+### 1. Core SDK Installation
 
-### 1. Prerequisites & Login
+To install the core data loading utilities:
+```bash
+uv sync
+# Or using pip:
+pip install .
+```
+
+### 2. Visualization Installation
+
+To enable the interactive `card-viz` tool and plotting features, install the visualization extras:
+```bash
+uv sync --extra viz
+# Or using pip:
+pip install ".[viz]"
+```
+
+## 🔑 Authentication & Download
+
+### Prerequisites & Login
 
 Before downloading the datasets, you must authenticate with Hugging Face.
 
@@ -56,7 +63,7 @@ Run the following command and enter your Hugging Face Access Token (make sure th
 huggingface-cli login
 ```
 
-### 2. Downloading the Data
+### Downloading the Data
 
 We provide a utility script located at `download/download_from_hf.py` to handle large dataset downloads efficiently.
 
@@ -77,7 +84,7 @@ python download/download_from_hf.py --output-dir ./data --repos germany_batch1 g
 
 ## 🧭 Visualization
 
-Once installed, you can use the card-viz command directly from your terminal to inspect datasets.
+Once installed with the `viz` extra, use the `card-viz` command to inspect datasets:
 
 ```bash
 card-viz <path-to-seq> --send-agg-depth-flag
@@ -139,7 +146,7 @@ You should see the rerun visualizer like this:
 - Italy data: [CC BY NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
 
 **SDK License:**
-- MIT License
+- Apache-2.0
 
 ---
 

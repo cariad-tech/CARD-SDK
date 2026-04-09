@@ -7,27 +7,34 @@ name = "card"
 version = "0.1.1"
 description = "CARD dataset Rerun Visualization"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
+license = "Apache-2.0" # Clear SPDX string for legal scanners
 
+# These are the "Clean" dependencies (mostly math and data)
 dependencies = [
   "laspy==2.6.1",
   "lazrs==0.8.0",
-  "numpy==2.2.6",
-  "scipy==1.16.2",
-  "opencv-python==4.12.0.88",
-  "rerun-sdk==0.25.1",
+  "numpy>=1.26.0",
+  "scipy>=1.12.0",
+  "huggingface-hub>=0.23.0",
 ]
 
 [project.optional-dependencies]
-viz = ["matplotlib>=3.9"]
+# Move all complex visualization tools here. 
+# Using "headless" avoids the license-heavy GUI sub-packages.
+viz = [
+    "opencv-python-headless>=4.10.0",
+    "rerun-sdk==0.25.1",
+    "matplotlib>=3.9",
+]
 torch = ["torch>=2.4", "torchvision>=0.19"]
 
 [project.scripts]
 card-viz = "rerun_vis:cli_main"
 
+[tool.uv]
+package = true # This ensures `uv sync` installs the card-viz command
+
 [tool.setuptools]
 py-modules = ["rerun_vis"]
-package-dir = {"" = "src", "card_dataset" = "card_dataset"}
-
-[tool.setuptools.packages.find]
-where = ["src", "card_dataset"]
+package-dir = {"" = "src"}
