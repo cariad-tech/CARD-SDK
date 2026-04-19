@@ -4,6 +4,7 @@ import os, re, json, random, functools, bisect, warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -232,7 +233,7 @@ class UnifiedCardDataset(Dataset):
         base_root: str,
         split_file: str,
         mode="train",
-        height=1000,
+        height=1216,
         width=1216,
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),

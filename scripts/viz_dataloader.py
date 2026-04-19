@@ -238,7 +238,7 @@ def main():
                     help="Output directory for visualizations")
     
     # Image parameters
-    ap.add_argument("--h", type=int, default=1000,
+    ap.add_argument("--h", type=int, default=1216,
                     help="Target image height")
     ap.add_argument("--w", type=int, default=1216,
                     help="Target image width")
