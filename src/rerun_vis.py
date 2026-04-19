@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 CARIAD SE
 import os
 import re
 import json
@@ -9,8 +11,46 @@ import rerun.blueprint as rrb
 import numpy as np
 from collections import defaultdict
 from pathlib import Path
-from scipy.spatial.transform import Rotation, Slerp
 from rerun.archetypes.series_lines import SeriesLines
+
+
+# ---------- pure-numpy quaternion math (no scipy dependency) ----------
+
+def _quat_xyzw_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
+    """Convert a unit quaternion (x,y,z,w) to a 3x3 rotation matrix."""
+    n = x*x + y*y + z*z + w*w
+    if n < 1e-10:
+        return np.eye(3, dtype=np.float64)
+    s = 2.0 / n
+    wx, wy, wz = w*x*s, w*y*s, w*z*s
+    xx, xy, xz = x*x*s, x*y*s, x*z*s
+    yy, yz, zz = y*y*s, y*z*s, z*z*s
+    return np.array([
+        [1.0 - (yy + zz),        xy - wz,          xz + wy],
+        [      xy + wz,    1.0 - (xx + zz),         yz - wx],
+        [      xz - wy,          yz + wx,     1.0 - (xx + yy)],
+    ], dtype=np.float64)
+
+
+def _slerp_xyzw(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between two unit quaternions (x,y,z,w)."""
+    q0 = np.asarray(q0, dtype=np.float64)
+    q1 = np.asarray(q1, dtype=np.float64)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = min(dot, 1.0)
+    if dot > 0.9995:
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
+    theta_0 = np.arccos(dot)
+    theta = theta_0 * t
+    sin_theta_0 = np.sin(theta_0)
+    s0 = np.cos(theta) - dot * np.sin(theta) / sin_theta_0
+    s1 = np.sin(theta) / sin_theta_0
+    result = s0 * q0 + s1 * q1
+    return result / np.linalg.norm(result)
 
 
 REFERENCE_VEHICLE_POSE = None
@@ -152,7 +192,7 @@ cc_colors = {
 
 
 def pose_to_matrix(x, y, z, qw, qx, qy, qz):
-    rot = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+    rot = _quat_xyzw_to_matrix(qx, qy, qz, qw)
     T = np.eye(4, dtype=np.float64)
     T[:3, :3] = rot
     T[:3, 3] = [x, y, z]
@@ -188,9 +228,7 @@ def interpolate_pose(traj_data, timestamp):
     q0_xyzw = sf_to_xyzw(quat0_sf)
     q1_xyzw = sf_to_xyzw(quat1_sf)
 
-    rotations = Rotation.from_quat(np.array([q0_xyzw, q1_xyzw]))
-    slerp = Slerp([0.0, 1.0], rotations)
-    interp_xyzw = slerp([t]).as_quat()[0]
+    interp_xyzw = _slerp_xyzw(q0_xyzw, q1_xyzw, t)
 
     qw = float(interp_xyzw[3])
     qx, qy, qz = map(float, interp_xyzw[:3])

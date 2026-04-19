@@ -5,35 +5,37 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "card"
 version = "0.1.1"
-description = "CARD dataset Rerun Visualization"
+description = "CARD dataset SDK: loading, download, and visualization utilities"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-license = "Apache-2.0" # Clear SPDX string for legal scanners
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 
-# These are the "Clean" dependencies (mostly math and data)
+# Core dependencies required for the dataloader and downloader.
+# All packages here are permissively licensed (Apache-2.0, BSD, MIT).
 dependencies = [
   "laspy==2.6.1",
   "lazrs==0.8.0",
   "numpy>=1.26.0",
-  "scipy>=1.12.0",
+  "pillow>=10.0.0",
+  "opencv-python-headless>=4.10.0",
   "huggingface-hub>=0.23.0",
 ]
 
 [project.optional-dependencies]
-# Move all complex visualization tools here. 
-# Using "headless" avoids the license-heavy GUI sub-packages.
+# Interactive 3D visualization via Rerun and matplotlib.
 viz = [
-    "opencv-python-headless>=4.10.0",
     "rerun-sdk==0.25.1",
     "matplotlib>=3.9",
 ]
+# PyTorch integration for training pipelines.
 torch = ["torch>=2.4", "torchvision>=0.19"]
 
 [project.scripts]
 card-viz = "rerun_vis:cli_main"
 
 [tool.uv]
-package = true # This ensures `uv sync` installs the card-viz command
+package = true
 
 [tool.setuptools]
 py-modules = ["rerun_vis"]

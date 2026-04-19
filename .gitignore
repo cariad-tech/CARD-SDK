@@ -1,31 +1,35 @@
 # Python compiled files
 *.py[cod]
 
-# virtualenv and other misc bits
-/src/*.egg-info
-*.egg-info
-/dist
-/build
-/bin
-/lib
-/Lib
-/pip-selfcheck.json
-/tmp
-/venv
+# Virtual environments
+.venv/
+/venv/
 .Python
 /include
 /Include
 /local
 */local/*
 /local/
+*.html
+# Build artifacts
+/src/*.egg-info
+*.egg-info/
+/dist
+/build
+/bin
+/lib
+/Lib
 /share/
 /tcl/
 /.eggs/
-scripts/Final_stats
-scripts/road_images
-# Installer logs
+
+# Package manager
+/pip-selfcheck.json
 pip-log.txt
+
+# Notebooks (personal copies)
 my_demo.ipynb
+
 # Unit test / coverage reports
 .cache
 .coverage
@@ -53,11 +57,16 @@ docs/Lib
 doc/pyvenv.cfg
 pyvenv.cfg
 
-# Various junk and temp files
+# Scripts outputs (local only)
+scripts/Final_stats
+scripts/road_images
+
+# OS / editor junk
 .DS_Store
 *~
 .*.sw[po]
 .build
+/tmp
 .ve
 *.bak
 /.cache/

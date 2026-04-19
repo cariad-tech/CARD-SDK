@@ -1,4 +1,5 @@
-# torch_augs.py
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 CARIAD SE
 import random
 import numpy as np
 import torch

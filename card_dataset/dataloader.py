@@ -1,13 +1,12 @@
-# unified_dataset.py
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 CARIAD SE
 import os, re, json, random, functools, bisect, warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 import numpy as np
-import cv2
 import torch
 from torch.utils.data import Dataset
-from scipy.spatial.transform import Rotation, Slerp
 
 from . import torch_augs as augs
 
@@ -30,6 +29,45 @@ class DatasetCorruptionError(RuntimeError):
 class DatasetConfigError(ValueError):
     """Raised when dataset loader configuration is inconsistent."""
     pass
+
+
+# ---------- pure-numpy quaternion math (no scipy dependency) ----------
+
+def _quat_xyzw_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
+    """Convert a unit quaternion (x,y,z,w) to a 3x3 rotation matrix."""
+    n = x*x + y*y + z*z + w*w
+    if n < 1e-10:
+        return np.eye(3, dtype=np.float32)
+    s = 2.0 / n
+    wx, wy, wz = w*x*s, w*y*s, w*z*s
+    xx, xy, xz = x*x*s, x*y*s, x*z*s
+    yy, yz, zz = y*y*s, y*z*s, z*z*s
+    return np.array([
+        [1.0 - (yy + zz),        xy - wz,          xz + wy],
+        [      xy + wz,    1.0 - (xx + zz),         yz - wx],
+        [      xz - wy,          yz + wx,     1.0 - (xx + yy)],
+    ], dtype=np.float32)
+
+
+def _slerp_xyzw(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between two unit quaternions (x,y,z,w)."""
+    q0 = np.asarray(q0, dtype=np.float64)
+    q1 = np.asarray(q1, dtype=np.float64)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = min(dot, 1.0)
+    if dot > 0.9995:
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
+    theta_0 = np.arccos(dot)
+    theta = theta_0 * t
+    sin_theta_0 = np.sin(theta_0)
+    s0 = np.cos(theta) - dot * np.sin(theta) / sin_theta_0
+    s1 = np.sin(theta) / sin_theta_0
+    result = s0 * q0 + s1 * q1
+    return result / np.linalg.norm(result)
 
 
 # ---------- utilities ----------
@@ -139,7 +177,7 @@ def custom_collate_fn(batch: List[Any]) -> Any:
 
 # ---------- pose math ----------
 def pose_to_matrix(x, y, z, qw, qx, qy, qz):
-    R = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+    R = _quat_xyzw_to_matrix(qx, qy, qz, qw)
     T = np.eye(4, dtype=np.float32)
     T[:3, :3] = R
     T[:3, 3] = [x, y, z]
@@ -147,11 +185,10 @@ def pose_to_matrix(x, y, z, qw, qx, qy, qz):
 
 
 def _slerp_scalar_first(q0, q1, t):
-    q0_xyzw = np.array([q0[1], q0[2], q0[3], q0[0]])
-    q1_xyzw = np.array([q1[1], q1[2], q1[3], q1[0]])
-    Rends = Rotation.from_quat(np.stack([q0_xyzw, q1_xyzw], 0))
-    s = Slerp([0.0, 1.0], Rends)
-    q_xyzw = s([t]).as_quat()[0]
+    # q0, q1 in scalar-first format [qw, qx, qy, qz]; return same format
+    q0_xyzw = np.array([q0[1], q0[2], q0[3], q0[0]], dtype=np.float64)
+    q1_xyzw = np.array([q1[1], q1[2], q1[3], q1[0]], dtype=np.float64)
+    q_xyzw = _slerp_xyzw(q0_xyzw, q1_xyzw, t)
     return [float(q_xyzw[3]), float(q_xyzw[0]), float(q_xyzw[1]), float(q_xyzw[2])]
 
 
