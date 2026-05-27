@@ -1,0 +1,10 @@
+resolutions:
+  rule_violations:
+    - message: "Dev.*: Please state whether components were modified.*Modules affected: .*"
+      reason: "NOT_MODIFIED_EXCEPTION"
+      comment: |
+        2026-05-27 We hereby confirm that all packages in this project are sourced via a package manager
+        from official artifact sources (or approved mirrors) and correspond 1:1 to their original
+        source versions. None of these packages have been modified.
+        We commit to continuously verifying the accuracy of this statement and will remove this
+        resolution immediately if any package is modified.
