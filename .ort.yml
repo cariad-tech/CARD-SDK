@@ -8,3 +8,7 @@ resolutions:
         source versions. None of these packages have been modified.
         We commit to continuously verifying the accuracy of this statement and will remove this
         resolution immediately if any package is modified.
+    - message: ".*pkg:pypi/opencv-python.*"
+      reason: "NOT_MODIFIED_EXCEPTION"
+      comment: |
+        2026-06-03 excluding opencv in the scan as agreed with the legal team, to avoid dependencies issues.
