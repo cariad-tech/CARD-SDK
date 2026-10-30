@@ -1,5 +1,8 @@
+<div align="center">
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
+</div>
 
+<br>
 
 <div align="center">
 Welcome to the SDK of CARD, a driving dataset dedicated to challenging road topographies that are rarely recorded, such as speed bumps, potholes, and off-road conditions. This repo is the toolkit designed for easy access, loading, and visualization of the CARD dataset. This repository provides the essential tools to get you started:
