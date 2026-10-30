@@ -1,0 +1,12 @@
+Nardo/monte_1/img/cam_1/cam_1_273002487.jpg
+Nardo/monte_1/img/cam_1/cam_1_277802488.jpg
+Nardo/monte_1/img/cam_1/cam_1_29302487.jpg
+Nardo/carmiano_6/img/cam_1/cam_1_8402395.jpg
+Nardo/nardo_sp2_bumps/img/cam_1/cam_1_145001842.jpg
+Nardo/Nardo_urban6/img/cam_1/cam_1_22701814.jpg
+Nardo/Nardo_urban6/img/cam_1/cam_1_67701980.jpg
+Nardo/nardo_urban2/img/cam_1/cam_1_205501877.jpg
+Nardo/nardo_urban2/img/cam_1/cam_1_206601877.jpg
+germany_batch3/Ingol_slam2/img/cam_1/cam_1_59601912.jpg
+germany_batch3/Ingol_slam2/img/cam_1/cam_1_59901912.jpg
+germany_batch3/Ingol_slam2/img/cam_1/cam_1_60401912.jpg

@@ -1,8 +1,9 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 # Copyright 2025 CARIAD SE
 import random
 import numpy as np
 import torch
+from torchvision.transforms import InterpolationMode, RandomResizedCrop
 import torchvision.transforms.functional as F
 
 def _np_rgb_to_t(rgb_np: np.ndarray) -> torch.Tensor:
@@ -27,13 +28,49 @@ class TorchColorAug:
         x = (x * 255.0).clamp(0, 255)
         return (_t_rgb_to_np(x), *rest)
 
+class TorchRandomResizedCrop:
+    def __init__(self, size, scale=(0.5, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0)):
+        self.size = tuple(size)
+        self.scale = scale
+        self.ratio = ratio
+
+    def __call__(self, rgb_np: np.ndarray, *depths_points_and_K):
+        *depths_and_points, K = depths_points_and_K
+        rgb_tensor = _np_rgb_to_t(rgb_np)
+        top, left, height, width = RandomResizedCrop.get_params(rgb_tensor, self.scale, self.ratio)
+        rgb_out = F.resized_crop(
+            rgb_tensor, top, left, height, width, self.size,
+            interpolation=InterpolationMode.BILINEAR, antialias=True,
+        )
+        outputs = []
+        for value in depths_and_points:
+            if value is None or value.ndim == 2 and value.shape[1] == 3:
+                outputs.append(value)
+                continue
+            tensor = torch.from_numpy(value.transpose(2, 0, 1))
+            cropped = F.resized_crop(
+                tensor, top, left, height, width, self.size,
+                interpolation=InterpolationMode.NEAREST,
+            )
+            outputs.append(cropped.permute(1, 2, 0).numpy())
+        new_K = None if K is None else K.copy()
+        if new_K is not None:
+            new_K[0, 2] -= left
+            new_K[1, 2] -= top
+            new_K[0, :] *= self.size[1] / width
+            new_K[1, :] *= self.size[0] / height
+        return (_t_rgb_to_np(rgb_out), *outputs, new_K)
+
+
 class TorchGeoAug:
     def __init__(self, hflip_p=0.5):
         self.hflip_p = hflip_p
+        self.last_flipped = False
     def __call__(self, rgb_np: np.ndarray, *depths_and_K):
         *depths, K = depths_and_K
         H, W = rgb_np.shape[:2]
         do = random.random() < self.hflip_p
+        self.last_flipped = do
         if not do:
             return (rgb_np, *depths, K)
         # flip rgb
@@ -45,6 +82,11 @@ class TorchGeoAug:
         for d in depths:
             if d is None:
                 out_depths.append(None); continue
+            if d.ndim == 2 and d.shape[1] == 3:
+                points = d.copy()
+                points[:, 0] *= -1
+                out_depths.append(points)
+                continue
             t = torch.from_numpy(d.transpose(2,0,1))
             t = F.hflip(t)
             out_depths.append(t.permute(1,2,0).numpy())

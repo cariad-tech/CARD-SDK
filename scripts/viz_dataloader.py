@@ -1,37 +1,34 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 # Copyright 2025 CARIAD SE
 """
-Comprehensive CARD Dataset Dataloader Visualization
+CARD Dataset Dataloader Visualization
 
-VISUALIZATION: Uses UnifiedCardDataset.for_visualization() 
-for instant initialization and fast single-sample examination.
-
-Features:
+Visualize the output of UnifiedCardDataset:
 - RGB images with bounding box annotations
-- Depth maps (sparse LiDAR, single-frame, aggregated)  
-- Stereo pairs and rectification
-- Temporal neighbor frames
-- Ground plane computation from wheels
-- Performance timing
+- Sparse, single-frame, and aggregated depth maps
+- Temporal neighbor frames and depth reprojections
+- Stereo-pair metadata
+- Ground-plane information from wheel contact points
+- Loading and initialization timings
 
-Usage Examples:
-# Fast visualization
-python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0
+Usage examples (run from the SDK checkout):
 
-# Minimal (fastest)  
-python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0 \
-  --no_labels --no_neighbors --skip_projections
+# Visualize a sample
+python -m scripts.viz_dataloader --base_root /path/to/data --split_file "$PWD/splits/small_samples.txt" --idx 0
 
-# Full features with ground plane
-python -m scripts.viz_dataloader --base_root "/path/to/dataset" --split_file "val.txt" --idx 0 \
-  --load_ground_plane
+# Minimal visualization
+python -m scripts.viz_dataloader --base_root /path/to/data --split_file "$PWD/splits/small_samples.txt" --idx 0 \
+    --no_labels --no_neighbors --no_stereo --skip_projections
+
+# Include ground-plane information
+python -m scripts.viz_dataloader --base_root /path/to/data --split_file "$PWD/splits/small_samples.txt" --idx 0 \
+    --load_ground_plane
 """
 
-import argparse, os, sys, numpy as np, torch, cv2
+import argparse, numpy as np, torch, cv2
 from pathlib import Path
 from card_dataset.dataloader import UnifiedCardDataset
-from collections import defaultdict
 
 
 def _ensure_dir(p: Path):
@@ -231,7 +228,7 @@ def main():
     ap.add_argument("--base_root", required=True, type=str,
                     help="Dataset root folder (sequence roots and export live under here)")
     ap.add_argument("--split_file", required=True, type=str,
-                    help="Split file (relative to base_root or absolute)")
+                    help="Path to a file in splits/ (absolute or relative to base_root)")
     ap.add_argument("--idx", type=int, default=0,
                     help="Sample index to visualize")
     ap.add_argument("--out_dir", type=str, default="./viz_out",
@@ -324,8 +321,8 @@ def main():
         
         # Save bounding box details
         with open(out_dir / "bboxes_info.txt", "w") as f:
-            f.write(f"Bounding Boxes Information\n")
-            f.write(f"==========================\n")
+            f.write("Bounding Boxes Information\n")
+            f.write("==========================\n")
             f.write(f"Total bounding boxes: {len(labels)}\n")
             f.write(f"Image dimensions: {rgb0.shape[1]}x{rgb0.shape[0]} (WxH)\n\n")
             for i, label in enumerate(labels):
@@ -340,9 +337,9 @@ def main():
         print("[info] No bounding boxes found in center frame")
     
     # ---------- Ground plane information ----------
-    if 'ground_plane' in item[center_cam]:
-        gp = item[center_cam]['ground_plane']
-        print(f"[info] Ground plane information available:")
+    gp = f0.get("ground_plane_info")
+    if gp is not None:
+        print("[info] Ground plane information available:")
         print(f"  Plane normal (world coords): {gp['plane_normal_world']}")
         print(f"  Plane point (world coords): {gp['plane_point_world']}")
         print(f"  Camera height above ground: {gp['camera_height_above_ground']:.3f}m")
@@ -350,13 +347,13 @@ def main():
         
         # Save ground plane info to text file
         with open(out_dir / "ground_plane_info.txt", "w") as f:
-            f.write(f"Ground Plane Information\n")
-            f.write(f"========================\n")
+            f.write("Ground Plane Information\n")
+            f.write("========================\n")
             f.write(f"Computed from wheel ground contact points at timestamp {gp['timestamp_us']}\n\n")
             f.write(f"Plane normal (world coords): {gp['plane_normal_world']}\n")
             f.write(f"Plane point (world coords): {gp['plane_point_world']}\n") 
             f.write(f"Camera height above ground: {gp['camera_height_above_ground']:.6f} meters\n\n")
-            f.write(f"Wheel ground contact points (world coords):\n")
+            f.write("Wheel ground contact points (world coords):\n")
             wheel_names = ["FL (Front Left)", "FR (Front Right)", "RL (Rear Left)", "RR (Rear Right)"]
             for i, point in enumerate(gp['wheel_points_world']):
                 wheel_name = wheel_names[i] if i < len(wheel_names) else f"Wheel {i+1}"
@@ -370,8 +367,8 @@ def main():
     
     if neighbor_count > 0:
         with open(out_dir / "neighbor_frames_info.txt", "w") as f:
-            f.write(f"Neighbor Frames Information\n")
-            f.write(f"===========================\n")
+            f.write("Neighbor Frames Information\n")
+            f.write("===========================\n")
             f.write(f"Total neighbor frames: {neighbor_count}\n")
             f.write(f"Available frame offsets: {list(center_frames.keys())}\n\n")
             for offset, frame in center_frames.items():
@@ -384,18 +381,18 @@ def main():
     # ---------- Stereo information ----------
     if not args.no_stereo and "stereo" in item and item["stereo"] is not None:
         stereo_info = item["stereo"]
-        print(f"[info] Stereo pairing available:")
+        print("[info] Stereo pairing available:")
         print(f"  Left camera: {stereo_info['left_cam']}")
         print(f"  Right camera: {stereo_info['right_cam']}")
         print(f"  Baseline: {stereo_info['baseline_m']:.3f}m")
         
         with open(out_dir / "stereo_info.txt", "w") as f:
-            f.write(f"Stereo Configuration\n")
-            f.write(f"====================\n")
+            f.write("Stereo Configuration\n")
+            f.write("====================\n")
             f.write(f"Left camera: {stereo_info['left_cam']}\n")
             f.write(f"Right camera: {stereo_info['right_cam']}\n")
             f.write(f"Baseline: {stereo_info['baseline_m']:.6f} meters\n\n")
-            f.write(f"Relative transformation (right from left):\n")
+            f.write("Relative transformation (right from left):\n")
             f.write(f"Rotation matrix:\n{stereo_info['R_right_from_left']}\n\n")
             f.write(f"Translation vector:\n{stereo_info['t_right_from_left']}\n")
     else:
@@ -453,7 +450,7 @@ def main():
         print("[info] Skipping depth projection visualizations (--skip_projections)")
     
     # ---------- Summary ----------
-    print(f"\n[summary] Dataset loading summary:")
+    print("\n[summary] Dataset loading summary:")
     print(f"  Sample index: {args.idx}")
     print(f"  Center camera: {center_cam}")
     print(f"  Image dimensions: {args.w}x{args.h}")
@@ -469,22 +466,20 @@ if __name__ == "__main__":
     main()
 
 
-# python -m scripts.viz_dataloader   --base_root "<path to data root>"   --split_file "val_all_data_clean.txt"   --idx 68 --load_ground_plane
-
-#     # Full comprehensive visualization (all features)
+# Full visualization with ground-plane information
 # python -m scripts.viz_dataloader \
-#   --base_root "<path to data root>" \
-#   --split_file "val.txt" \
-#   --idx 6268 --load_ground_plane
+#   --base_root "/path/to/data" \
+#   --split_file "$PWD/splits/small_samples.txt" \
+#   --idx 0 --load_ground_plane
 
-# # Fast minimal visualization (center image only)
+# Minimal visualization (center image only)
 # python -m scripts.viz_dataloader \
-#   --base_root "<path to data root>" \
-#   --split_file "val.txt" \
-#   --idx 6268 --no_labels --no_neighbors --no_stereo --skip_projections
+#   --base_root "/path/to/data" \
+#   --split_file "$PWD/splits/small_samples.txt" \
+#   --idx 0 --no_labels --no_neighbors --no_stereo --skip_projections
 
-# # Custom configuration
+# Custom image resolution
 # python -m scripts.viz_dataloader \
-#   --base_root "<path to data root>" \
-#   --split_file "val.txt" \
-#   --idx 6268 --load_ground_plane --skip_projections --h 480 --w 640
+#   --base_root "/path/to/data" \
+#   --split_file "$PWD/splits/small_samples.txt" \
+#   --idx 0 --load_ground_plane --skip_projections --h 480 --w 640

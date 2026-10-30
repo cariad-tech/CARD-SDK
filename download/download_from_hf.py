@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 # Copyright 2025 CARIAD SE
 """
 download_from_hf.py
@@ -14,14 +14,10 @@ Features:
 """
 
 import argparse
-import os
-import sys
 from pathlib import Path
-from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import Optional
 
 from huggingface_hub import snapshot_download, HfApi
-from huggingface_hub.utils import HfHubHTTPError
 
 REPO_MAP = {
     "germany_batch2": "CARD-Data/CARD-Germany-Batch2",
@@ -59,13 +55,15 @@ def download_repo(
             repo_id=repo_id,
             repo_type="dataset",
             local_dir=local_dir,
-            resume_download=resume,
+            force_download=not resume,
             token=token,
             allow_patterns=allow_patterns, 
         )
         print(f"✅ Success: {repo_id}")
+        return True
     except Exception as e:
         print(f"Error downloading {repo_id}: {e}")
+        return False
 
 def check_repo(
     repo_id: str,
@@ -85,7 +83,7 @@ def check_repo(
         remote_map = {f.path: f.size for f in remote_files if hasattr(f, "size")}
     except Exception as e:
         print(f"  Failed to fetch remote info: {e}")
-        return
+        return False
 
     # 2. Check Local State
     missing = []
@@ -122,6 +120,7 @@ def check_repo(
 
     if not missing and not mismatch:
         print(" Perfect match!")
+    return not missing and not mismatch
 
 def main():
     parser = argparse.ArgumentParser(description="Downloader for CARD-Data repositories.")
@@ -165,7 +164,7 @@ def main():
         "--token", 
         type=str, 
         default=None, 
-        help="HuggingFace token (optional if you are already logged in via `huggingface-cli login`)."
+        help="HuggingFace token (optional if you are already logged in via `hf auth login`)."
     )
 
     args = parser.parse_args()
@@ -174,21 +173,25 @@ def main():
         args.output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Selected Repositories: {args.repos}")
-    
+
+    all_successful = True
     for key in args.repos:
         repo_id = REPO_MAP[key]
         local_path = get_local_path(args.output_dir, key) # e.g. ./data/germany_batch2
         
         if args.check:
-            check_repo(repo_id, local_path, token=args.token)
+            successful = check_repo(repo_id, local_path, token=args.token)
         else:
-            download_repo(
+            successful = download_repo(
                 repo_id=repo_id,
                 local_dir=local_path,
                 is_test=args.test,
                 resume=not args.no_resume,
                 token=args.token
             )
+        all_successful = all_successful and successful
+
+    return 0 if all_successful else 1
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

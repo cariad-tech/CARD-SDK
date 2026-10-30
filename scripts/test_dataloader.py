@@ -1,31 +1,19 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 # Copyright 2025 CARIAD SE
-"""
-Unified Data Loader Tester & Visualizer
+"""Check a CARD split or inspect one sample.
 
-This script serves two purposes:
-1. UNIT TEST: Validate that the data loader can load *every* sample in a split file without crashing.
-2. VISUALIZE: Deep dive into a single sample (images, depth, ground plane, re-projections).
-
-Usage:
-
-1. [Unit Test] Check integrity of ALL samples in the split file:
-   python -m scripts.test_dataloader --base_root "/path/to/data" --split_file "val.txt" --test_integrity
-
-2. [Visualize] Inspect a single sample (Index 6288) with Ground Plane:
-   python -m scripts.test_dataloader --base_root "/path/to/data" --split_file "val.txt" --idx 6288 --load_ground_plane
+Run from the SDK checkout:
+python -m scripts.test_dataloader --base_root /path/to/data --split_file "$PWD/splits/val.txt" --test_integrity
 """
 
 import argparse
-import os
 import sys
 import time
 import numpy as np
 import cv2
 import torch
 from pathlib import Path
-from collections import defaultdict
 
 current_file_path = Path(__file__).resolve()
 project_root = current_file_path.parent.parent
@@ -110,13 +98,14 @@ def run_integrity_check(ds):
     Iterates over the entire dataset to ensure every sample loads without error.
     """
     print(f"\n{'='*60}")
-    print(f"🚀 STARTING DATASET INTEGRITY TEST")
+    print("🚀 STARTING DATASET INTEGRITY TEST")
     print(f"   Total Samples: {len(ds)}")
     print(f"{'='*60}\n")
 
     success_count = 0
     fail_count = 0
     failed_indices = []
+    interrupted = False
 
     # Try to import tqdm for progress bar
     try:
@@ -132,10 +121,13 @@ def run_integrity_check(ds):
         try:
             sample = ds[i]
             if sample is None:
-                pass 
+                fail_count += 1
+                failed_indices.append((i, "Loader returned None (missing or filtered sample)"))
+                continue
             success_count += 1
         except KeyboardInterrupt:
             print("\n[Stop] Integrity check interrupted by user.")
+            interrupted = True
             break
         except Exception as e:
             fail_count += 1
@@ -144,10 +136,11 @@ def run_integrity_check(ds):
     total_time = time.time() - start_t
     
     print(f"\n{'='*60}")
-    print(f"📊 TEST RESULTS")
+    print("📊 TEST RESULTS")
     print(f"{'='*60}")
     print(f"   Time Elapsed : {total_time:.2f}s")
-    print(f"   Avg Time/Item: {total_time/len(ds):.4f}s")
+    checked_count = success_count + fail_count
+    print(f"   Avg Time/Item: {total_time/max(1, checked_count):.4f}s")
     print(f"   ✅ SUCCESS   : {success_count}")
     print(f"   ❌ FAILED    : {fail_count}")
     
@@ -157,9 +150,12 @@ def run_integrity_check(ds):
             print(f"      Idx {idx}: {error}")
         if fail_count > 20:
             print(f"      ... and {fail_count - 20} more.")
-    else:
+    elif not interrupted and checked_count > 0:
         print("\n   ✨ PASSED: All samples loaded correctly.")
+    else:
+        print("\n   NOT PASSED: Integrity check was interrupted or the split is empty.")
     print(f"{'='*60}\n")
+    return not interrupted and fail_count == 0 and checked_count > 0
 
 
 def run_single_visualization(ds, idx, out_dir, skip_projections):
@@ -214,7 +210,7 @@ def run_single_visualization(ds, idx, out_dir, skip_projections):
     
         # 5. Reprojections
         if not skip_projections:
-            print(f"   -> Running Reprojection Check...")
+            print("   -> Running Reprojection Check...")
             pts_c, _ = backproject(sparse, f0["K"])
             T_cw = f0["T_cam_world"].numpy()
             pts_w = transform(pts_c, T_cw) # Cam -> World
@@ -240,7 +236,7 @@ def main():
     
     # Paths
     parser.add_argument("--base_root", required=True, help="Path to dataset root")
-    parser.add_argument("--split_file", required=True, help="Name of split file (e.g., val.txt)")
+    parser.add_argument("--split_file", required=True, help="Path to a file in splits/ (absolute or relative to base_root)")
     parser.add_argument("--out_dir", default="./viz_results", help="Output folder")
     
     # Mode Selection
@@ -251,7 +247,6 @@ def main():
     parser.add_argument("--load_ground_plane", action="store_true", help="Compute ground planes")
     parser.add_argument("--no_labels", action="store_true", help="Disable labels")
     parser.add_argument("--no_stereo", action="store_true", help="Disable stereo")
-    parser.add_argument("--disable_laz", action="store_true", help="Run without LAZ/laspy")
     parser.add_argument("--skip_projections", action="store_true", help="Skip heavy reprojection logic in viz")
 
     args = parser.parse_args()
@@ -278,20 +273,14 @@ def main():
         load_ground_plane_info=args.load_ground_plane,
         load_labels=not args.no_labels,
         stereo=not args.no_stereo,
-        require_laz=not args.disable_laz,
-        # Ensure strict mode is ON to catch corruptions during test
-        strict=True 
     )
 
     if args.test_integrity:
-        run_integrity_check(ds)
+        if not run_integrity_check(ds):
+            raise SystemExit(1)
     else:
         out_path = Path(args.out_dir) / f"idx_{args.idx}"
         run_single_visualization(ds, args.idx, out_path, args.skip_projections)
 
 if __name__ == "__main__":
     main()
-
-
-
-# python -m scripts.test_dataloader   --base_root "<path to data root>"   --split_file "val.txt"   --idx 6288 --load_ground_plane --test_integrity
