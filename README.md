@@ -155,7 +155,14 @@ You should see the rerun visualizer like this:
 
 If you use CARD or the SDK in your research, please cite:
 
-> [Add your citation here]
+> @InProceedings{Elazab_2026_CVPR,
+    author    = {Elazab, Gasser and Neuhaus, Frank and Ko{\ss}, Tilman and Splietker, Malte and Date, Aditya and Unterreiner, Michael and Jansen, Maximilian and Hellwich, Olaf},
+    title     = {CARD: A Multi-Modal Automotive Dataset for Dense 3D Reconstruction in Challenging Road Topography},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2026},
+    pages     = {17820-17830}
+}
 
 ---
 
