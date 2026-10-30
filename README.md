@@ -1,6 +1,3 @@
-<img width="4032" height="695" alt="image" src="https://github.com/user-attachments/assets/8a1d6a42-c2cd-4de9-989a-f281ec6b47ba" /><img width="4032" height="803" alt="image" src="https://github.com/user-attachments/assets/0bd7321a-1918-41e2-a45f-206f777034bb" /># CARD SDK
-<div align="center">
-
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
 
 
