@@ -125,7 +125,9 @@ python -m scripts.test_dataloader \
 ### Package Walkthrough
 
 <div align="center">
-<a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/video_how_to_rerun_4.mp4">Watch the SDK walkthrough</a>
+
+https://github.com/user-attachments/assets/3b2118a0-1c44-49f4-817b-8f2e574c684e
+
 </div>
 
 ### Dataset Overview
