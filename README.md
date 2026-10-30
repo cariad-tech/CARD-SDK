@@ -1,4 +1,4 @@
-<img width="4032" height="803" alt="image" src="https://github.com/user-attachments/assets/0bd7321a-1918-41e2-a45f-206f777034bb" /># CARD SDK
+<img width="4032" height="695" alt="image" src="https://github.com/user-attachments/assets/8a1d6a42-c2cd-4de9-989a-f281ec6b47ba" /><img width="4032" height="803" alt="image" src="https://github.com/user-attachments/assets/0bd7321a-1918-41e2-a45f-206f777034bb" /># CARD SDK
 <div align="center">
 
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
@@ -150,21 +150,21 @@ You should see the rerun visualizer like this:
 
 ---
 
-
 ## 📚 Citation
 
 If you use CARD or the SDK in your research, please cite:
 
-''' @InProceedings{Elazab_2026_CVPR,
+```bibtex
+@InProceedings{Elazab_2026_CVPR,
     author    = {Elazab, Gasser and Neuhaus, Frank and Ko{\ss}, Tilman and Splietker, Malte and Date, Aditya and Unterreiner, Michael and Jansen, Maximilian and Hellwich, Olaf},
     title     = {CARD: A Multi-Modal Automotive Dataset for Dense 3D Reconstruction in Challenging Road Topography},
     booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
     month     = {June},
     year      = {2026},
-    pages     = {17820-17830}
+    pages     = {17820--17830}
 }
+```
 
-'''
 
 ## 📬 Contact
 
