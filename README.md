@@ -1,12 +1,16 @@
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
 
 
-</div>
 <div align="center">
-Welcome to the SDK of CARD, which is a driving dataset dedicated to the worse road topographies that are rarely recorded, such as speed bumps, potholes, and off-road conditions. This repo is the toolkit designed for easy access, loading, and visualization of the CARD dataset. This repository provides the essential tools to get you started:
+Welcome to the SDK of CARD, a driving dataset dedicated to challenging road topographies that are rarely recorded, such as speed bumps, potholes, and off-road conditions. This repo is the toolkit designed for easy access, loading, and visualization of the CARD dataset. This repository provides the essential tools to get you started:
 </div>
 
-📂 Repository Overview
+CARD and its SDK were developed by Gasser Elazab at CARIAD SE as part of his PhD research.
+
+This repository provides the supporting tools and information required to access, load, visualize, and work with the CARD dataset. It is intended to facilitate research use of the dataset and provide the supporting SDK for accessing its data and modalities.
+
+
+## 📂 Repository Overview
 1. Download Utilities (download/)
 
 download/download_from_hf.py: A robust script to download specific batches (e.g., Germany, Italy) or the entire dataset directly from Hugging Face.
@@ -99,7 +103,7 @@ You should see the rerun visualizer like this:
 		--base_root "<path to data root>" \
 		--split_file "val_all_data_clean.txt" \
 		--idx 68 \
-		--load_ground_plan
+		--load_ground_plane
 	```
 
 - Data integrity checker using `scripts/test_dataloader.py` (useful when you have the full dataset and want to verify a given split):
@@ -130,7 +134,8 @@ You should see the rerun visualizer like this:
 
 
 
-### An example of data sample of a speed bump. 
+### An example data sample of a speed bump
+
 
 <img src="gifs/overview_1.jpg" alt="Vehicle Setup and Example Output Overview" width="50%"/>
 
@@ -143,9 +148,18 @@ You should see the rerun visualizer like this:
 - Italy data: [CC BY NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
 
 **SDK License:**
-- Apache-2.0
+- MIT License. See [LICENSE](LICENSE) for details.
 
 ---
+
+## ⚠️ Disclaimer
+
+This Software / Contribution is unfinished, untested and is in particular
+not in a state to be used in any productive or series context. It is provided
+as a starting point for further development and any use requires extensive
+checks, improvements and testing, for which exclusively the user integrating
+this OSS shall be responsible.
+
 
 ## 📚 Citation
 
