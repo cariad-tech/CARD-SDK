@@ -1,161 +1,158 @@
+# CARD SDK
+
 <div align="center">
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
 </div>
 
-<br>
+Download, load, and visualize CARD, a driving dataset for challenging road
+topographies, including speed bumps, potholes, and off-road terrain.
+
+Developed by Gasser Elazab at CARIAD SE as part of his PhD research.
+
+## Install
+
+Run the examples from this checkout. Python 3.11 or 3.12 is required.
+
+```bash
+uv sync --python 3.11 --extra torch --extra viz
+source .venv/bin/activate
+```
+
+Alternatively, in an existing Python 3.11/3.12 environment:
+
+```bash
+python -m pip install ".[torch,viz]"
+```
+
+Use only `torch` for the dataloader, only `viz` for Rerun, or neither extra
+for downloading alone.
+
+## Download
+
+Authenticate with a Hugging Face token that has read access, then download:
+
+```bash
+hf auth login
+python -m download.download_from_hf --output-dir ./data
+```
+
+To select batches, add `--repos` followed by any of `germany_batch1`,
+`germany_batch2`, `germany_batch3`, or `italy`. Add `--check` to compare local
+file sizes against the remote metadata without downloading.
+
+## Splits
+
+Use the supplied files in [splits](splits):
+
+| File | Use |
+| --- | --- |
+| [train.txt](splits/train.txt) | Training |
+| [val.txt](splits/val.txt) | Validation |
+| [test.txt](splits/test.txt) | Testing |
+| [small_samples.txt](splits/small_samples.txt) | Quick inspection |
+
+Each line is an image path relative to your dataset root. Set `base_root` to
+the directory containing those paths. The split file itself can be an
+absolute path or a path relative to `base_root`.
+
+## Load Data
+
+```python
+from pathlib import Path
+from torch.utils.data import DataLoader
+from card_dataset.dataloader import UnifiedCardDataset, custom_collate_fn
+
+dataset = UnifiedCardDataset.for_inference(
+    base_root="/path/to/data",
+    split_file=str(Path("splits/small_samples.txt").resolve()),
+)
+loader = DataLoader(dataset, batch_size=1, collate_fn=custom_collate_fn)
+batch = next(iter(loader))
+camera = batch["meta"]["center_cam"][0]
+frame = batch[camera]["frames"][0]
+print(frame["rgb"].shape)
+```
+
+Use `for_training` with `train.txt` for augmented training samples, or
+`for_inference` with `val.txt` or `test.txt` for evaluation.
+
+The loader reads precomputed NPZ depth; it does not generate depth from raw
+LAZ files. Missing optional modalities are `None`. Corrupt files and invalid
+image paths raise errors.
+
+Ground-plane data is optional (`load_ground_plane_info=True`). Germany
+Batch 1 lacks wheel-contact calibration, so its plane is an estimate, marked
+`ground_plane_info["source"] == "vehicle_height_estimate"`, not ground truth.
+Other batches' `_ground` and `_Ground` key spellings are matched
+case-insensitively.
+
+## Visualize
+
+Open a sequence in Rerun:
+
+```bash
+card-viz /path/to/sequence --send-agg-depth-flag
+```
+
+Save a sample's images and depth reprojections:
+
+```bash
+python -m scripts.viz_dataloader \
+    --base_root "/path/to/data" \
+    --split_file "$PWD/splits/small_samples.txt" \
+    --idx 0 --load_ground_plane
+```
+
+See [Rerun options](src/README.md) for additional views. To check every sample
+in a split, use:
+
+```bash
+python -m scripts.test_dataloader \
+    --base_root "/path/to/data" \
+    --split_file "$PWD/splits/val.txt" \
+    --test_integrity
+```
+
+### Rerun Example
 
 <div align="center">
-Welcome to the SDK of CARD, a driving dataset dedicated to challenging road topographies that are rarely recorded, such as speed bumps, potholes, and off-road conditions. This repo is the toolkit designed for easy access, loading, and visualization of the CARD dataset. This repository provides the essential tools to get you started:
+<a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/speed_bump_example.mp4">
+<img src="gifs/rerun_gif.gif" alt="Rerun speed-bump example"/>
+</a>
+<p><a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/speed_bump_example.mp4">Watch the full Rerun recording</a></p>
 </div>
 
-CARD and its SDK were developed by Gasser Elazab at CARIAD SE as part of his PhD research.
+### Package Walkthrough
 
-This repository provides the supporting tools and information required to access, load, visualize, and work with the CARD dataset. It is intended to facilitate research use of the dataset and provide the supporting SDK for accessing its data and modalities.
+<div align="center">
+<a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/video_how_to_rerun_4.mp4">Watch the SDK walkthrough</a>
+</div>
 
+### Dataset Overview
 
-## 📂 Repository Overview
-1. Download Utilities (download/)
-
-download/download_from_hf.py: A robust script to download specific batches (e.g., Germany, Italy) or the entire dataset directly from Hugging Face.
-
-2. Core SDK (card_dataset/)
-
-card_dataset/dataloader.py: The main generalizable dataloader. Use this to integrate CARD data into your Python pipelines with synchronized sensor and trajectory data.
-
-3. Visualization & Scripts (scripts/ & src/)
-
-src/rerun_vis.py (installed as card-viz): The primary interactive 3D visualizer powered by Rerun.
-
-scripts/viz_dataloader.py: A helper script to visualize and verify the raw output directly from the dataloader.
-
-## 🚀 Installation
-
-This SDK is optimized for use with the [uv](https://docs.astral.sh/uv/) package manager.
-
-### 1. Core SDK Installation
-
-To install the core data loading utilities:
-```bash
-uv sync
-# Or using pip:
-pip install .
-```
-
-### 2. Visualization Installation
-
-To enable the interactive `card-viz` tool and plotting features, install the visualization extras:
-```bash
-uv sync --extra viz
-# Or using pip:
-pip install ".[viz]"
-```
-
-## 🔑 Authentication & Download
-
-### Prerequisites & Login
-
-Before downloading the datasets, you must authenticate with Hugging Face.
-
-**Install the library:**
-```bash
-pip install huggingface_hub
-```
-
-**Log in:**  
-Run the following command and enter your Hugging Face Access Token (make sure the token has read permissions):
-```bash
-huggingface-cli login
-```
-
-### Downloading the Data
-
-We provide a utility script located at `download/download_from_hf.py` to handle large dataset downloads efficiently.
-
-**Option A: Download Everything (Recommended)**  
-To download the entire CARD dataset (Germany and Italy batches) to a `data/` folder:
-```bash
-python download/download_from_hf.py --output-dir ./data
-```
-
-**Option B: Download Germany Data Only (Commercial-Friendly License)**  
-If you only need the Germany datasets (Batch 1, 2, and 3), you can filter the download using the `--repos` flag:
-```bash
-python download/download_from_hf.py --output-dir ./data --repos germany_batch1 germany_batch2 germany_batch3
-```
-*Note: You can replace the repository keys above to download any specific combination you need (e.g., just `--repos italy`).*
-
----
-
-## 🧭 Visualization
-
-Once installed with the `viz` extra, use the `card-viz` command to inspect datasets:
-
-```bash
-card-viz <path-to-seq> --send-agg-depth-flag
-```
-You should see the rerun visualizer like this:
-
-![Rerun output](gifs/rerun_gif.gif)
-
-### Visualizing the output from the dataloader
-
-- Visualizer using `scripts/viz_dataloader.py` projecting depth from image at (t) to (t-1) and (t+1):
-
-	```bash
-	python -m scripts.viz_dataloader \
-		--base_root "<path to data root>" \
-		--split_file "val_all_data_clean.txt" \
-		--idx 68 \
-		--load_ground_plane
-	```
-
-- Data integrity checker using `scripts/test_dataloader.py` (useful when you have the full dataset and want to verify a given split):
-
-	```bash
-	python -m scripts.test_dataloader \
-		--base_root "<path to data root>" \
-		--split_file "val.txt" \
-		--idx 6288 \
-		--load_ground_plane \
-		--test_integrity
-	```
-
----
-
-### 💡 Utility Tips
-
-- **Test Run:** Not sure if your setup works? Add `--test` to download only the metadata files (fast).
-	```bash
-	python download/download_from_hf.py --output-dir ./data --test
-	```
-- **Verify Integrity:** If you suspect a corrupted download, use `--check` to verify your local files against the remote server without re-downloading.
-	```bash
-	python download/download_from_hf.py --output-dir ./data --check
-	```
-
----
-
-
-
-### An example data sample of a speed bump
-
-
+<div align="center">
 <img src="gifs/overview_1.jpg" alt="Vehicle Setup and Example Output Overview" width="50%"/>
+</div>
 
----
+## Notebook
 
-## 📄 License & Property Notice
+Set these paths before running [demo.ipynb](demo.ipynb) in your Jupyter
+environment:
 
-**Dataset License:**
-- Germany data: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-- Italy data: [CC BY NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
+```bash
+export CARD_DATA_ROOT="/path/to/data"
+export CARD_SPLIT_FILE="$PWD/splits/small_samples.txt"
+```
 
-**SDK License:**
-- MIT License. See [LICENSE](LICENSE) for details.
+The notebook requires precomputed depth files and both installation extras.
 
----
+## License
 
-## ⚠️ Disclaimer
+- SDK: [MIT](LICENSE).
+- Germany data: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- Italy data: [CC BY NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+
+## Disclaimer
 
 This Software / Contribution is unfinished, untested and is in particular
 not in a state to be used in any productive or series context. It is provided
@@ -163,10 +160,7 @@ as a starting point for further development and any use requires extensive
 checks, improvements and testing, for which exclusively the user integrating
 this OSS shall be responsible.
 
-
-## 📚 Citation
-
-If you use CARD or the SDK in your research, please cite:
+## Citation
 
 ```bibtex
 @InProceedings{Elazab_2026_CVPR,
@@ -179,9 +173,4 @@ If you use CARD or the SDK in your research, please cite:
 }
 ```
 
-
-## 📬 Contact
-
-For questions, reach out to: **gasser.elazab@cariad.technology**
-
-
+Contact: **gasser.elazab@cariad.technology**
