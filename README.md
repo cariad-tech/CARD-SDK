@@ -2,6 +2,10 @@
 
 <div align="center">
 <img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
+<p>
+<a href="https://openaccess.thecvf.com/content/CVPR2026/html/Elazab_CARD_A_Multi-Modal_Automotive_Dataset_for_Dense_3D_Reconstruction_in_CVPR_2026_paper.html"><img src="https://img.shields.io/badge/Paper-CVPR%202026-B31B1B?style=for-the-badge" alt="Paper - CVPR 2026"/></a>
+<a href="https://card.content.cariad.digital/"><img src="https://img.shields.io/badge/Website-CARD-00897B?style=for-the-badge" alt="CARD Website"/></a>
+</p>
 </div>
 
 Download, load, and visualize CARD, a driving dataset for challenging road
@@ -116,10 +120,9 @@ python -m scripts.test_dataloader \
 ### Rerun Example
 
 <div align="center">
-<a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/speed_bump_example.mp4">
-<img src="gifs/rerun_gif.gif" alt="Rerun speed-bump example"/>
-</a>
-<p><a href="https://github.com/cariad-tech/CARD-SDK/blob/main/videos/speed_bump_example.mp4">Watch the full Rerun recording</a></p>
+
+https://github.com/user-attachments/assets/3e6019a9-7d3c-48ab-ae05-09f1a163695f
+
 </div>
 
 ### Package Walkthrough
