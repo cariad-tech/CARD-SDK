@@ -31,6 +31,15 @@ python -m pip install ".[torch,viz]"
 Use only `torch` for the dataloader, only `viz` for Rerun, or neither extra
 for downloading alone.
 
+## Repository Layout
+
+- [card_dataset](card_dataset): dataloader and synchronized augmentations.
+- [download](download): Hugging Face download and file-size verification.
+- [scripts](scripts): sample previews and split integrity checks.
+- [src](src): the installed `card-viz` Rerun viewer.
+- [splits](splits): training, validation, test, and small-sample image lists.
+- [demo.ipynb](demo.ipynb): interactive depth and height examples.
+
 ## Download
 
 Authenticate with a Hugging Face token that has read access, then download:
@@ -43,6 +52,18 @@ python -m download.download_from_hf --output-dir ./data
 To select batches, add `--repos` followed by any of `germany_batch1`,
 `germany_batch2`, `germany_batch3`, or `italy`. Add `--check` to compare local
 file sizes against the remote metadata without downloading.
+
+Downloads preserve the split-compatible layout under one root:
+
+```text
+data/
+    germany_2days/
+    germany_batch2/
+    germany_batch3/
+    Nardo/
+```
+
+Use this `data/` directory as `base_root` when combining batches.
 
 ## Splits
 
@@ -83,6 +104,10 @@ Use `for_training` with `train.txt` for augmented training samples, or
 The loader reads precomputed NPZ depth; it does not generate depth from raw
 LAZ files. Missing optional modalities are `None`. Corrupt files and invalid
 image paths raise errors.
+
+Augmented training is intended for depth learning. Bounding-box labels are
+omitted when augmentations are enabled; detection-label augmentation is not
+implemented.
 
 Ground-plane data is optional (`load_ground_plane_info=True`). Germany
 Batch 1 lacks wheel-contact calibration, so its plane is an estimate, marked
@@ -133,7 +158,7 @@ https://github.com/user-attachments/assets/3b2118a0-1c44-49f4-817b-8f2e574c684e
 
 </div>
 
-### Dataset Overview
+### Dataset Setup & Examples
 
 <div align="center">
 <img src="gifs/overview_1.jpg" alt="Vehicle Setup and Example Output Overview" width="50%"/>
@@ -168,7 +193,7 @@ this OSS shall be responsible.
 ## Citation
 
 ```bibtex
-@InProceedings{Elazab_2026_CVPR,
+@InProceedings{Elazab_CARD_CVPR2026,
     author    = {Elazab, Gasser and Neuhaus, Frank and Ko{\ss}, Tilman and Splietker, Malte and Date, Aditya and Unterreiner, Michael and Jansen, Maximilian and Hellwich, Olaf},
     title     = {CARD: A Multi-Modal Automotive Dataset for Dense 3D Reconstruction in Challenging Road Topography},
     booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},

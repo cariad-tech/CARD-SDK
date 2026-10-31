@@ -26,8 +26,13 @@ python -m scripts.viz_dataloader --base_root /path/to/data --split_file "$PWD/sp
     --load_ground_plane
 """
 
-import argparse, numpy as np, torch, cv2
+import argparse
 from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+
 from card_dataset.dataloader import UnifiedCardDataset
 
 
@@ -37,7 +42,7 @@ def _ensure_dir(p: Path):
 
 def chw_to_hwc_uint8(img_t, mean, std):
     img = img_t.detach().cpu().float().numpy().transpose(1, 2, 0)
-    img = (img * std + mean)
+    img = img * std + mean
     img = np.clip(img * 255.0, 0, 255).astype(np.uint8)
     return img
 
@@ -46,14 +51,15 @@ def depth_to_colormap(depth_chw, vmin=0.1, vmax=60.0):
     if depth_chw is None:
         return None
     d = depth_chw[0].detach().cpu().numpy()
-    d = np.nan_to_num(d, nan=0.0)
+    valid = np.isfinite(d) & (d > 0)
+    d = np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0)
     if d.size == 0:
         return None
     d = np.clip(d, vmin, vmax)
     rng = max(1e-6, (vmax - vmin))
     d_uint8 = (np.clip((d - vmin) / rng, 0.0, 1.0) * 255.0).astype(np.uint8)
     cm = cv2.applyColorMap(d_uint8, cv2.COLORMAP_TURBO)[:, :, ::-1]  # BGR->RGB
-    alpha = (d > 0).astype(np.float32)[..., None]
+    alpha = valid.astype(np.float32)[..., None]
     return (cm.astype(np.float32) * alpha + 255 * (1 - alpha)).astype(np.uint8)
 
 
@@ -110,35 +116,35 @@ def draw_pts(img, uv, m, color=(0, 255, 0), r=1):
 
 def draw_bboxes(img, labels, color=(255, 255, 0), thickness=2):
     """Draw bounding boxes on image.
-    
+
     Args:
         img: RGB image array (H, W, 3)
         labels: List of dicts with 'class' and 'bbox' (x1, y1, x2, y2) keys
         color: RGB color tuple for bounding box
         thickness: Line thickness
-    
+
     Returns:
         Image with bounding boxes drawn
     """
     if labels is None or len(labels) == 0:
         return img
-    
+
     out = img.copy()
     for label in labels:
-        class_id = label['class']
-        x1, y1, x2, y2 = label['bbox']
-        
+        class_id = label["class"]
+        x1, y1, x2, y2 = label["bbox"]
+
         # Draw bounding box
         cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
-        
+
         # Draw class label
         text = f"Class {class_id}"
         text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-        cv2.rectangle(out, (int(x1), int(y1) - text_size[1] - 5), 
-                      (int(x1) + text_size[0], int(y1)), color, -1)
-        cv2.putText(out, text, (int(x1), int(y1) - 5), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    
+        cv2.rectangle(
+            out, (int(x1), int(y1) - text_size[1] - 5), (int(x1) + text_size[0], int(y1)), color, -1
+        )
+        cv2.putText(out, text, (int(x1), int(y1) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
     return out
 
 
@@ -151,38 +157,38 @@ def _get_neighbor_frames(frames_dict):
 
 def _save_png(path: Path, rgb):
     _ensure_dir(path.parent)
-    cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+        raise OSError(f"Failed to write visualization: {path}")
 
 
 def _do_projection_bundle(
     tag: str,
     out_root: Path,
-    rgb0, K0, Tcw0, source_depth_chw,
+    rgb0,
+    K0,
+    Tcw0,
+    source_depth_chw,
     frames,  # dict: { -1: {...}, 0:{...}, +1:{...} }
-    stereo_payload,  # dict or None
-    mean_vec, std_vec,
+    mean_vec,
+    std_vec,
     center_labels=None,  # bounding box labels for center frame
+    depth_range=(0.1, 60.0),
 ):
     """
     Project a given source (agg or sparse) from center@t into:
       - center@t
       - neighbor@t-1 (if exists)
       - neighbor@t+1 (if exists)
-      - stereo mate (if exists)
     Save under: out_root/<tag>/...
     """
     root = out_root / tag
     _ensure_dir(root)
 
-    # # 1) Visualize source on center
-    # cm0 = depth_to_colormap(source_depth_chw)
-    # over0 = overlay(rgb0, cm0, 0.6)
-    
-    # # Add bounding boxes to overlay if available
-    # if center_labels is not None and len(center_labels) > 0:
-    #     over0 = draw_bboxes(over0, center_labels)
-    
-    # _save_png(root / "t_center_overlay.png", over0)
+    cm0 = depth_to_colormap(source_depth_chw, *depth_range)
+    over0 = overlay(rgb0, cm0, 0.6)
+    if center_labels:
+        over0 = draw_bboxes(over0, center_labels)
+    _save_png(root / "t_center_overlay.png", over0)
 
     # 2) Backproject source@t -> 3D (center camera)
     pts_c, _ = backproject(source_depth_chw, torch.from_numpy(K0))
@@ -192,23 +198,24 @@ def _do_projection_bundle(
         return
 
     # 3) Reproject back to center (sanity)
-    Pw = transform(pts_c, Tcw0)            # center@t -> world
-    Twc0 = np.linalg.inv(Tcw0)             # world -> center
+    Pw = transform(pts_c, Tcw0)  # center@t -> world
+    Twc0 = np.linalg.inv(Tcw0)  # world -> center
     Pc0 = transform(Pw, Twc0)
     uv0, m0 = project(Pc0, K0, rgb0.shape)
     rgb0_pts = draw_pts(rgb0, uv0, m0, (0, 255, 0), 1)
-    
+
     # Add bounding boxes to reprojection
     if center_labels is not None and len(center_labels) > 0:
         rgb0_pts = draw_bboxes(rgb0_pts, center_labels)
-    
+
     _save_png(root / "t_center_reproj_from_t.png", rgb0_pts)
 
     # 4) Reproject to neighbors (if available)
     f_m1, f_p1 = _get_neighbor_frames(frames)
     if f_m1 is not None and f_m1.get("rgb") is not None:
         rgb_m1 = chw_to_hwc_uint8(f_m1["rgb"], mean_vec, std_vec)
-        Km1 = f_m1["K"].numpy(); Tcwm1 = f_m1["T_cam_world"].numpy()
+        Km1 = f_m1["K"].numpy()
+        Tcwm1 = f_m1["T_cam_world"].numpy()
         Twcm1 = np.linalg.inv(Tcwm1)
         Pcm1 = transform(Pw, Twcm1)
         uvm1, mm1 = project(Pcm1, Km1, rgb_m1.shape)
@@ -216,7 +223,8 @@ def _do_projection_bundle(
 
     if f_p1 is not None and f_p1.get("rgb") is not None:
         rgb_p1 = chw_to_hwc_uint8(f_p1["rgb"], mean_vec, std_vec)
-        Kp1 = f_p1["K"].numpy(); Tcwp1 = f_p1["T_cam_world"].numpy()
+        Kp1 = f_p1["K"].numpy()
+        Tcwp1 = f_p1["T_cam_world"].numpy()
         Twcp1 = np.linalg.inv(Tcwp1)
         Pcp1 = transform(Pw, Twcp1)
         uvp1, mp1 = project(Pcp1, Kp1, rgb_p1.shape)
@@ -225,42 +233,60 @@ def _do_projection_bundle(
 
 def main():
     ap = argparse.ArgumentParser(description="Comprehensive CARD Dataset Dataloader Visualization")
-    ap.add_argument("--base_root", required=True, type=str,
-                    help="Dataset root folder (sequence roots and export live under here)")
-    ap.add_argument("--split_file", required=True, type=str,
-                    help="Path to a file in splits/ (absolute or relative to base_root)")
-    ap.add_argument("--idx", type=int, default=0,
-                    help="Sample index to visualize")
-    ap.add_argument("--out_dir", type=str, default="./viz_out",
-                    help="Output directory for visualizations")
-    
-    # Image parameters
-    ap.add_argument("--h", type=int, default=1216,
-                    help="Target image height")
-    ap.add_argument("--w", type=int, default=1216,
-                    help="Target image width")
-    
-    # Dataset efficiency flags
-    ap.add_argument("--no_stereo", action="store_true", 
-                    help="Disable stereo pairing even if available")
-    ap.add_argument("--no_labels", action="store_true", 
-                    help="Disable loading labels for efficiency")
-    ap.add_argument("--no_neighbors", action="store_true", 
-                    help="Disable loading neighbor frames for efficiency")
-    ap.add_argument("--load_ground_plane", action="store_true", 
-                    help="Load ground plane information from wheel contact points")
-    
-    # Visualization options
-    ap.add_argument("--skip_projections", action="store_true",
-                    help="Skip depth projection visualizations (faster)")
-    ap.add_argument("--depth_range", nargs=2, type=float, default=[0.1, 60.0],
-                    help="Depth visualization range [min max] in meters")
-    
-    args = ap.parse_args()
+    ap.add_argument(
+        "--base_root",
+        required=True,
+        type=str,
+        help="Dataset root folder (sequence roots and export live under here)",
+    )
+    ap.add_argument(
+        "--split_file",
+        required=True,
+        type=str,
+        help="Path to a file in splits/ (absolute or relative to base_root)",
+    )
+    ap.add_argument("--idx", type=int, default=0, help="Sample index to visualize")
+    ap.add_argument(
+        "--out_dir", type=str, default="./viz_out", help="Output directory for visualizations"
+    )
 
-    split_path = Path(args.split_file)
-    if not split_path.is_absolute():
-        split_path = Path(args.base_root) / args.split_file
+    # Image parameters
+    ap.add_argument("--h", type=int, default=1216, help="Target image height")
+    ap.add_argument("--w", type=int, default=1216, help="Target image width")
+
+    # Dataset efficiency flags
+    ap.add_argument(
+        "--no_stereo", action="store_true", help="Disable stereo pairing even if available"
+    )
+    ap.add_argument(
+        "--no_labels", action="store_true", help="Disable loading labels for efficiency"
+    )
+    ap.add_argument(
+        "--no_neighbors", action="store_true", help="Disable loading neighbor frames for efficiency"
+    )
+    ap.add_argument(
+        "--load_ground_plane",
+        action="store_true",
+        help="Load ground plane information from wheel contact points",
+    )
+
+    # Visualization options
+    ap.add_argument(
+        "--skip_projections",
+        action="store_true",
+        help="Skip depth projection visualizations (faster)",
+    )
+    ap.add_argument(
+        "--depth_range",
+        nargs=2,
+        type=float,
+        default=[0.1, 60.0],
+        help="Depth visualization range [min max] in meters",
+    )
+
+    args = ap.parse_args()
+    if not 0 < args.depth_range[0] < args.depth_range[1]:
+        ap.error("--depth_range must satisfy 0 < min < max")
 
     print("[info] Creating visualization-optimized dataset:")
     print(f"  Image size: {args.w}x{args.h}")
@@ -268,27 +294,33 @@ def main():
     print(f"  Neighbors: {'disabled' if args.no_neighbors else 'enabled'}")
     print(f"  Stereo: {'disabled' if args.no_stereo else 'enabled'}")
     print(f"  Ground plane: {'enabled' if args.load_ground_plane else 'disabled'}")
-    
+
     import time
+
     start_time = time.time()
-    
+
     ds = UnifiedCardDataset.for_inference(
         base_root=args.base_root,
-        split_file=str(split_path.relative_to(args.base_root)) if str(split_path).startswith(str(Path(args.base_root))) else str(split_path),
-        height=args.h, width=args.w,
+        split_file=args.split_file,
+        height=args.h,
+        width=args.w,
         load_labels=not args.no_labels,
         load_neighbors=not args.no_neighbors,
         load_ground_plane_info=args.load_ground_plane,
         stereo=not args.no_stereo,
         context_offsets=(-1, 0, +1) if not args.no_neighbors else (0,),
     )
-    
+
     init_time = time.time() - start_time
     print(f"[info] Dataset initialized in {init_time:.2f}s")
 
     print(f"[info] Loading sample {args.idx}...")
     load_start = time.time()
     item = ds[args.idx]
+    if item is None:
+        raise ValueError(
+            f"Sample at index {args.idx} was filtered; there is no sample to visualize"
+        )
     load_time = time.time() - load_start
     print(f"[info] Sample loaded in {load_time:.2f}s")
     center_cam = item["meta"]["center_cam"]
@@ -305,20 +337,20 @@ def main():
 
     out_dir = Path(args.out_dir)
     _ensure_dir(out_dir)
-    
+
     # ---------- Basic visualizations ----------
     print("[info] Saving basic visualizations...")
-    
+
     # Save plain center image
     _save_png(out_dir / "center_rgb.png", rgb0)
-    
+
     # ---------- Bounding box visualization ----------
     labels = f0.get("labels", None)
     if labels is not None and len(labels) > 0:
         rgb0_with_bboxes = draw_bboxes(rgb0, labels)
         _save_png(out_dir / "center_with_bboxes.png", rgb0_with_bboxes)
         print(f"[info] Found {len(labels)} bounding boxes in center frame")
-        
+
         # Save bounding box details
         with open(out_dir / "bboxes_info.txt", "w") as f:
             f.write("Bounding Boxes Information\n")
@@ -326,16 +358,16 @@ def main():
             f.write(f"Total bounding boxes: {len(labels)}\n")
             f.write(f"Image dimensions: {rgb0.shape[1]}x{rgb0.shape[0]} (WxH)\n\n")
             for i, label in enumerate(labels):
-                x1, y1, x2, y2 = label['bbox']
+                x1, y1, x2, y2 = label["bbox"]
                 width = x2 - x1
                 height = y2 - y1
-                f.write(f"Box {i+1}:\n")
+                f.write(f"Box {i + 1}:\n")
                 f.write(f"  Class: {label['class']}\n")
                 f.write(f"  Coordinates: ({x1}, {y1}) to ({x2}, {y2})\n")
                 f.write(f"  Size: {width}x{height} pixels\n\n")
     else:
         print("[info] No bounding boxes found in center frame")
-    
+
     # ---------- Ground plane information ----------
     gp = f0.get("ground_plane_info")
     if gp is not None:
@@ -344,27 +376,36 @@ def main():
         print(f"  Plane point (world coords): {gp['plane_point_world']}")
         print(f"  Camera height above ground: {gp['camera_height_above_ground']:.3f}m")
         print(f"  Number of wheel points: {gp['wheel_points_world'].shape[0]}")
-        
+
         # Save ground plane info to text file
         with open(out_dir / "ground_plane_info.txt", "w") as f:
             f.write("Ground Plane Information\n")
             f.write("========================\n")
-            f.write(f"Computed from wheel ground contact points at timestamp {gp['timestamp_us']}\n\n")
+            f.write(
+                f"Computed from wheel ground contact points at timestamp {gp['timestamp_us']}\n\n"
+            )
             f.write(f"Plane normal (world coords): {gp['plane_normal_world']}\n")
-            f.write(f"Plane point (world coords): {gp['plane_point_world']}\n") 
-            f.write(f"Camera height above ground: {gp['camera_height_above_ground']:.6f} meters\n\n")
+            f.write(f"Plane point (world coords): {gp['plane_point_world']}\n")
+            f.write(
+                f"Camera height above ground: {gp['camera_height_above_ground']:.6f} meters\n\n"
+            )
             f.write("Wheel ground contact points (world coords):\n")
-            wheel_names = ["FL (Front Left)", "FR (Front Right)", "RL (Rear Left)", "RR (Rear Right)"]
-            for i, point in enumerate(gp['wheel_points_world']):
-                wheel_name = wheel_names[i] if i < len(wheel_names) else f"Wheel {i+1}"
+            wheel_names = [
+                "FL (Front Left)",
+                "FR (Front Right)",
+                "RL (Rear Left)",
+                "RR (Rear Right)",
+            ]
+            for i, point in enumerate(gp["wheel_points_world"]):
+                wheel_name = wheel_names[i] if i < len(wheel_names) else f"Wheel {i + 1}"
                 f.write(f"  {wheel_name}: ({point[0]:.6f}, {point[1]:.6f}, {point[2]:.6f})\n")
     else:
         print("[info] Ground plane information not available (use --load_ground_plane to enable)")
-    
+
     # ---------- Neighbor frames information ----------
-    neighbor_count = len([k for k in center_frames.keys() if k != 0])
+    neighbor_count = sum(offset != 0 for offset in center_frames)
     print(f"[info] Loaded {neighbor_count} neighbor frames")
-    
+
     if neighbor_count > 0:
         with open(out_dir / "neighbor_frames_info.txt", "w") as f:
             f.write("Neighbor Frames Information\n")
@@ -377,7 +418,7 @@ def main():
                     f.write(f"  Timestamp: {frame['timestamp_us']} microseconds\n")
                     f.write(f"  RGB shape: {frame['rgb'].shape}\n")
                     f.write(f"  Has labels: {frame.get('labels') is not None}\n\n")
-    
+
     # ---------- Stereo information ----------
     if not args.no_stereo and "stereo" in item and item["stereo"] is not None:
         stereo_info = item["stereo"]
@@ -385,7 +426,7 @@ def main():
         print(f"  Left camera: {stereo_info['left_cam']}")
         print(f"  Right camera: {stereo_info['right_cam']}")
         print(f"  Baseline: {stereo_info['baseline_m']:.3f}m")
-        
+
         with open(out_dir / "stereo_info.txt", "w") as f:
             f.write("Stereo Configuration\n")
             f.write("====================\n")
@@ -397,25 +438,26 @@ def main():
             f.write(f"Translation vector:\n{stereo_info['t_right_from_left']}\n")
     else:
         print("[info] No stereo pairing available")
-    
+
     # ---------- Depth projection visualizations ----------
     if not args.skip_projections:
         print("[info] Creating depth projection visualizations...")
-        
-        vmin, vmax = args.depth_range
-        
+
         # A) Projections using AGG depth (if available)
         if f0.get("depth_agg") is not None:
             print("  - Processing aggregated depth...")
             _do_projection_bundle(
                 tag="out_agg",
                 out_root=out_dir,
-                rgb0=rgb0, K0=K0, Tcw0=Tcw0,
+                rgb0=rgb0,
+                K0=K0,
+                Tcw0=Tcw0,
                 source_depth_chw=f0["depth_agg"],
                 frames=center_frames,
-                stereo_payload=item.get("stereo", None),
-                mean_vec=mean, std_vec=std,
+                mean_vec=mean,
+                std_vec=std,
                 center_labels=labels,
+                depth_range=args.depth_range,
             )
         else:
             print("  - No aggregated depth available")
@@ -430,37 +472,49 @@ def main():
             sparse_src = f0["lidar_sparse"]
             src_name = "lidar_sparse (accumulated ground truth - may show multiple scans)"
             print("    WARNING: Using accumulated sparse ground truth instead of single scan")
-            print("    This may show accumulated points from multiple LiDAR scans rather than a single scan")
+            print(
+                "    This may show accumulated points from multiple LiDAR scans rather than a single scan"
+            )
 
         if sparse_src is not None:
             print(f"  - Processing {src_name}...")
             _do_projection_bundle(
                 tag="out_sparse",
                 out_root=out_dir,
-                rgb0=rgb0, K0=K0, Tcw0=Tcw0,
+                rgb0=rgb0,
+                K0=K0,
+                Tcw0=Tcw0,
                 source_depth_chw=sparse_src,
                 frames=center_frames,
-                stereo_payload=item.get("stereo", None),
-                mean_vec=mean, std_vec=std,
+                mean_vec=mean,
+                std_vec=std,
                 center_labels=labels,
+                depth_range=args.depth_range,
             )
         else:
             print("  - No sparse depth available")
     else:
         print("[info] Skipping depth projection visualizations (--skip_projections)")
-    
+
     # ---------- Summary ----------
     print("\n[summary] Dataset loading summary:")
     print(f"  Sample index: {args.idx}")
     print(f"  Center camera: {center_cam}")
     print(f"  Image dimensions: {args.w}x{args.h}")
-    print(f"  Labels: {'enabled' if not args.no_labels else 'disabled'} ({len(labels) if labels else 0} found)")
-    print(f"  Neighbors: {'enabled' if not args.no_neighbors else 'disabled'} ({neighbor_count} loaded)")
+    print(
+        f"  Labels: {'enabled' if not args.no_labels else 'disabled'} ({len(labels) if labels else 0} found)"
+    )
+    print(
+        f"  Neighbors: {'enabled' if not args.no_neighbors else 'disabled'} ({neighbor_count} loaded)"
+    )
     print(f"  Ground plane: {'enabled' if args.load_ground_plane else 'disabled'}")
     print(f"  Stereo: {'enabled' if not args.no_stereo else 'disabled'}")
-    print(f"  Available depth types: {[k for k in f0.keys() if 'depth' in k or 'sparse' in k]}")
+    print(
+        f"  Available depth types: {[key for key, value in f0.items() if value is not None and ('depth' in key or 'sparse' in key)]}"
+    )
 
     print(f"\n[done] Wrote results under: {out_dir.resolve()}")
+
 
 if __name__ == "__main__":
     main()

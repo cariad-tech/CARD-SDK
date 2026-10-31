@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright 2025 CARIAD SE
+import json
 import os
 import re
-import json
-import cv2
-import laspy
-import rerun as rr
-import rerun.blueprint as rrb
-import numpy as np
 from collections import defaultdict
 from pathlib import Path
-from rerun.archetypes.series_lines import SeriesLines
 
+import cv2
+import laspy
+import numpy as np
+import rerun as rr
+import rerun.blueprint as rrb
+from rerun.archetypes.series_lines import SeriesLines
 
 # ---------- pure-numpy quaternion math (no scipy dependency) ----------
 
+
 def _quat_xyzw_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
     """Convert a unit quaternion (x,y,z,w) to a 3x3 rotation matrix."""
-    n = x*x + y*y + z*z + w*w
+    n = x * x + y * y + z * z + w * w
     if n < 1e-10:
         return np.eye(3, dtype=np.float64)
     s = 2.0 / n
-    wx, wy, wz = w*x*s, w*y*s, w*z*s
-    xx, xy, xz = x*x*s, x*y*s, x*z*s
-    yy, yz, zz = y*y*s, y*z*s, z*z*s
-    return np.array([
-        [1.0 - (yy + zz),        xy - wz,          xz + wy],
-        [      xy + wz,    1.0 - (xx + zz),         yz - wx],
-        [      xz - wy,          yz + wx,     1.0 - (xx + yy)],
-    ], dtype=np.float64)
+    wx, wy, wz = w * x * s, w * y * s, w * z * s
+    xx, xy, xz = x * x * s, x * y * s, x * z * s
+    yy, yz, zz = y * y * s, y * z * s, z * z * s
+    return np.array(
+        [
+            [1.0 - (yy + zz), xy - wz, xz + wy],
+            [xy + wz, 1.0 - (xx + zz), yz - wx],
+            [xz - wy, yz + wx, 1.0 - (xx + yy)],
+        ],
+        dtype=np.float64,
+    )
 
 
 def _slerp_xyzw(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
@@ -57,6 +61,7 @@ REFERENCE_VEHICLE_POSE = None
 ROAD_PLANE_NORMAL = None
 ROAD_PLANE_POINT = None
 
+
 def compute_road_plane_from_wheels(traj_data, vehicle_pose):
     """Compute road plane from wheel ground contact points (vehicle frame)."""
     wheel_ground_keys = [
@@ -67,9 +72,12 @@ def compute_road_plane_from_wheels(traj_data, vehicle_pose):
     ]
 
     wheel_points_vehicle = []
+    sensor_poses = {
+        key.lower(): value for key, value in traj_data["sensor_to_trajectory_poses"].items()
+    }
     for wheel_key in wheel_ground_keys:
-        if wheel_key in traj_data["sensor_to_trajectory_poses"]:
-            wheel_pose = traj_data["sensor_to_trajectory_poses"][wheel_key]
+        if wheel_key.lower() in sensor_poses:
+            wheel_pose = sensor_poses[wheel_key.lower()]
             wheel_point = np.array([wheel_pose[0], wheel_pose[1], wheel_pose[2]])
             wheel_points_vehicle.append(wheel_point)
             print(f"  {wheel_key} (vehicle coords): {wheel_point}")
@@ -79,7 +87,9 @@ def compute_road_plane_from_wheels(traj_data, vehicle_pose):
             f"Warning: Only {len(wheel_points_vehicle)} wheel contact points found, using default fixed plane"
         )
         # Default: horizontal plane 1.8 m below vehicle
-        return np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.8]) #this is approximately the ground plane
+        return np.array([0.0, 0.0, 1.0]), np.array(
+            [0.0, 0.0, -1.8]
+        )  # this is approximately the ground plane
 
     wheel_points_vehicle = np.array(wheel_points_vehicle)
     centroid_vehicle = np.mean(wheel_points_vehicle, axis=0)
@@ -93,14 +103,8 @@ def compute_road_plane_from_wheels(traj_data, vehicle_pose):
     if normal_vehicle[2] < 0:
         normal_vehicle = -normal_vehicle
 
-    print(
-        f"Ground plane in vehicle coords: normal={normal_vehicle}, "
-        f"centroid={centroid_vehicle}"
-    )
-    print(
-        f"Ground plane centroid z={centroid_vehicle[2]:.3f}m "
-        f"(distance below vehicle center)"
-    )
+    print(f"Ground plane in vehicle coords: normal={normal_vehicle}, centroid={centroid_vehicle}")
+    print(f"Ground plane centroid z={centroid_vehicle[2]:.3f}m (distance below vehicle center)")
 
     return normal_vehicle, centroid_vehicle
 
@@ -137,9 +141,7 @@ def get_height_colors(
 
     colors = np.zeros((len(points), 3), dtype=np.uint8)
 
-    mask_detailed = (distances_to_plane >= start_height) & (
-        distances_to_plane <= end_height
-    )
+    mask_detailed = (distances_to_plane >= start_height) & (distances_to_plane <= end_height)
     mask_higher = distances_to_plane > end_height
     mask_lower = distances_to_plane < start_height
 
@@ -147,24 +149,16 @@ def get_height_colors(
         norm_heights = (distances_to_plane[mask_detailed] - start_height) / height_range
         colors[mask_detailed] = np.column_stack(
             [
-                np.clip(
-                    255 * (0.05 + 0.95 * np.power(norm_heights, 0.5)), 0, 255
-                ).astype(np.uint8),
+                np.clip(255 * (0.05 + 0.95 * np.power(norm_heights, 0.5)), 0, 255).astype(np.uint8),
                 np.clip(255 * np.power(norm_heights, 1.5), 0, 255).astype(np.uint8),
-                np.clip(
-                    255 * (0.95 - 0.9 * np.power(norm_heights, 0.8)), 0, 255
-                ).astype(np.uint8),
+                np.clip(255 * (0.95 - 0.9 * np.power(norm_heights, 0.8)), 0, 255).astype(np.uint8),
             ]
         )
 
     if np.any(mask_higher):
-        norm_heights = np.clip(
-            (distances_to_plane[mask_higher] - end_height) / 3.0, 0.0, 1.0
-        )
+        norm_heights = np.clip((distances_to_plane[mask_higher] - end_height) / 3.0, 0.0, 1.0)
         gray_value = (180 + 75 * (1.0 - norm_heights)).astype(np.uint8)
-        colors[mask_higher] = np.column_stack(
-            [gray_value, gray_value, gray_value]
-        ).astype(np.uint8)
+        colors[mask_higher] = np.column_stack([gray_value, gray_value, gray_value]).astype(np.uint8)
 
     if np.any(mask_lower):
         n = np.sum(mask_lower)
@@ -177,7 +171,6 @@ def get_height_colors(
         )
 
     return colors
-
 
 
 cam_left = "cam_1"
@@ -282,7 +275,6 @@ def get_dataset_image_buffer(traj_data, dataset_folder, subsample=1):
     return ImageBuffer(all_images)
 
 
-
 def rr_send_sensor_extrinsics(traj_data):
     rr.log(
         "world/rig/axis",
@@ -297,9 +289,7 @@ def rr_send_sensor_extrinsics(traj_data):
             f"world/rig/{frame_name}",
             rr.Transform3D(
                 translation=[pose[0], pose[1], pose[2]],
-                rotation=rr.Quaternion(
-                    xyzw=[pose[4], pose[5], pose[6], pose[3]]
-                ),
+                rotation=rr.Quaternion(xyzw=[pose[4], pose[5], pose[6], pose[3]]),
             ),
             static=True,
         )
@@ -325,9 +315,7 @@ def rr_send_rig_trajectory(traj_data):
     rr.send_columns(
         "world/rig",
         indexes=[rr.TimeColumn("sensor_time", duration=timestamps)],
-        columns=rr.Transform3D.columns(
-            translation=positions, quaternion=quaternions_xyzw
-        ),
+        columns=rr.Transform3D.columns(translation=positions, quaternion=quaternions_xyzw),
     )
     rr.log("world/trajectory", rr.LineStrips3D([positions]), static=True)
 
@@ -337,9 +325,7 @@ def read_yolo_bboxes(image_path, labels_dir):
     if img is None:
         return []
     h, w = img.shape[:2]
-    label_file = os.path.join(
-        labels_dir, os.path.basename(image_path).replace(".jpg", ".txt")
-    )
+    label_file = os.path.join(labels_dir, os.path.basename(image_path).replace(".jpg", ".txt"))
     bboxes = []
     if os.path.exists(label_file):
         with open(label_file, "r") as f:
@@ -352,9 +338,7 @@ def read_yolo_bboxes(image_path, labels_dir):
                     y1 = int(y_c - bh / 2)
                     x2 = int(x_c + bw / 2)
                     y2 = int(y_c + bh / 2)
-                    bboxes.append(
-                        {"class": int(cls), "bbox": (x1, y1, x2, y2)}
-                    )
+                    bboxes.append({"class": int(cls), "bbox": (x1, y1, x2, y2)})
     return bboxes
 
 
@@ -393,9 +377,7 @@ def rr_send_gps_data(sensor_export):
     if "gps" not in sensor_export:
         return
     gps = sensor_export["gps"]
-    gps_traj = [
-        [g["lat_rad"] / np.pi * 180.0, g["lon_rad"] / np.pi * 180.0] for g in gps
-    ]
+    gps_traj = [[g["lat_rad"] / np.pi * 180.0, g["lon_rad"] / np.pi * 180.0] for g in gps]
     rr.log(
         "gps/trajectory",
         rr.GeoLineStrings(
@@ -411,11 +393,7 @@ def rr_send_gps_data(sensor_export):
         rr.log(
             "gps/points",
             rr.GeoPoints(
-                lat_lon=np.array(
-                    [g["lat_rad"], g["lon_rad"]]
-                )
-                / np.pi
-                * 180.0,
+                lat_lon=np.array([g["lat_rad"], g["lon_rad"]]) / np.pi * 180.0,
                 radii=rr.Radius.ui_points(4.0),
                 colors=[255, 0, 0],
             ),
@@ -442,13 +420,10 @@ def rr_send_wheel_excitement(wheel_excitement):
             contact = wheel_result["ground_trajectory"]["poses"]
         if contact:
             for timestamp, pose in contact:
-                x, y, z, qw, qx, qy, qz = pose
-                positions.append([x, y, z])
+                positions.append(pose[:3])
             rr.log(
                 f"world/contact_point_trajectory_{wheel_id}",
-                rr.LineStrips3D(
-                    [positions], colors=[cc_colors[wheel_id]]
-                ),
+                rr.LineStrips3D([positions], colors=[cc_colors[wheel_id]]),
                 static=True,
             )
 
@@ -462,12 +437,7 @@ def log_agg_depth_points(
     color_by_height=False,
     height_range=(-0.5, 0.5),
 ):
-    npz_path = (
-        Path(base_dir)
-        / "agg_depth"
-        / cam_name
-        / f"{cam_name}_{timestamp}.npz"
-    )
+    npz_path = Path(base_dir) / "agg_depth" / cam_name / f"{cam_name}_{timestamp}.npz"
     if not npz_path.is_file():
         return
 
@@ -477,15 +447,11 @@ def log_agg_depth_points(
     pose_cam_to_rig = traj_data["sensor_to_trajectory_poses"][cam_name]
     T_cam_to_rig = pose_to_matrix(*pose_cam_to_rig)
 
-    pose_rig_world = interpolate_pose(
-        traj_data, timestamp + cam_info.get("timestamp_offset", 0)
-    )
+    pose_rig_world = interpolate_pose(traj_data, timestamp + cam_info.get("timestamp_offset", 0))
     T_rig_to_world = pose_to_matrix(*pose_rig_world)
     T_cam_to_world = T_rig_to_world @ T_cam_to_rig
 
-    pts_world = (
-        T_cam_to_world @ np.c_[pts_cam, np.ones(len(pts_cam))].T
-    ).T[:, :3]
+    pts_world = (T_cam_to_world @ np.c_[pts_cam, np.ones(len(pts_cam))].T).T[:, :3]
 
     rr.set_time("sensor_time", duration=timestamp / 1e6)
 
@@ -595,9 +561,7 @@ def rr_send_cam_frame(
         )
 
 
-def send_dense_depth(
-    timestamp_us, cam_name, cam_info, traj_data, depth_root="depth"
-):
+def send_dense_depth(timestamp_us, cam_name, cam_info, traj_data, depth_root="depth"):
     npz_path = Path(depth_root) / cam_name / f"{cam_name}_{timestamp_us}.npz"
     if not npz_path.is_file():
         return
@@ -605,14 +569,10 @@ def send_dense_depth(
     pts_cam = data["pts_cam"].astype(np.float32)
     pose_cam_to_rig = traj_data["sensor_to_trajectory_poses"][cam_name]
     T_cam_to_rig = pose_to_matrix(*pose_cam_to_rig)
-    pose_rig_world = interpolate_pose(
-        traj_data, timestamp_us + cam_info.get("timestamp_offset", 0)
-    )
+    pose_rig_world = interpolate_pose(traj_data, timestamp_us + cam_info.get("timestamp_offset", 0))
     T_rig_to_world = pose_to_matrix(*pose_rig_world)
     T_cam_to_world = T_rig_to_world @ T_cam_to_rig
-    pts_world = (
-        T_cam_to_world @ np.c_[pts_cam, np.ones(len(pts_cam))].T
-    ).T[:, :3]
+    pts_world = (T_cam_to_world @ np.c_[pts_cam, np.ones(len(pts_cam))].T).T[:, :3]
     rr.set_time("sensor_time", duration=timestamp_us / 1e6)
     rr.log(
         f"world/dense_depth/{cam_name}",
@@ -647,9 +607,7 @@ def stereo_rectification(traj_data, left, right):
         "world/rig/cam_stereo",
         rr.Transform3D(
             translation=cam_pose[:3],
-            rotation=rr.Quaternion(
-                xyzw=[cam_pose[4], cam_pose[5], cam_pose[6], cam_pose[3]]
-            ),
+            rotation=rr.Quaternion(xyzw=[cam_pose[4], cam_pose[5], cam_pose[6], cam_pose[3]]),
         ),
         static=True,
     )
@@ -684,12 +642,8 @@ def stereo_rectification(traj_data, left, right):
     R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
         K_l, dist_l, K_r, dist_r, image_size, R, t, flags=cv2.CALIB_ZERO_DISPARITY
     )
-    map1_l, map2_l = cv2.initUndistortRectifyMap(
-        K_l, dist_l, R1, P1, image_size, cv2.CV_16SC2
-    )
-    map1_r, map2_r = cv2.initUndistortRectifyMap(
-        K_r, dist_r, R2, P2, image_size, cv2.CV_16SC2
-    )
+    map1_l, map2_l = cv2.initUndistortRectifyMap(K_l, dist_l, R1, P1, image_size, cv2.CV_16SC2)
+    map1_r, map2_r = cv2.initUndistortRectifyMap(K_r, dist_r, R2, P2, image_size, cv2.CV_16SC2)
     rect_l = cv2.remap(image_left, map1_l, map2_l, cv2.INTER_LINEAR)
     rect_r = cv2.remap(image_right, map1_r, map2_r, cv2.INTER_LINEAR)
 
@@ -700,35 +654,25 @@ def stereo_rectification(traj_data, left, right):
         Q[2, 3] *= scale
         P1[:2, :] *= scale
         h, w = rect_l.shape[:2]
-        rect_l = cv2.resize(
-            rect_l, (int(w * scale), int(h * scale)), cv2.INTER_AREA
-        )
+        rect_l = cv2.resize(rect_l, (int(w * scale), int(h * scale)), cv2.INTER_AREA)
         h, w = rect_r.shape[:2]
-        rect_r = cv2.resize(
-            rect_r, (int(w * scale), int(h * scale)), cv2.INTER_AREA
-        )
+        rect_r = cv2.resize(rect_r, (int(w * scale), int(h * scale)), cv2.INTER_AREA)
 
     disp = sgbm.compute(rect_l, rect_r).astype(np.float32) / 16.0
     disp[: int(disp.shape[0] / 4), :] = 0
     disp[int(3 * disp.shape[0] / 4) :, :] = 0
-    disp_vis = cv2.normalize(
-        disp, None, 0, 255, cv2.NORM_MINMAX
-    ).astype(np.uint8)
+    disp_vis = cv2.normalize(disp, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
     pts3d = cv2.reprojectImageTo3D(disp, Q).reshape(-1, 3)
     mask = disp.flatten() > disp.min()
     pts3d = pts3d[mask]
     pts3d = pts3d[(pts3d[:, 2] > 2.5) & (pts3d[:, 2] < 50.0)]
 
-    T_cam_to_rig = pose_to_matrix(
-        *traj_data["sensor_to_trajectory_poses"][cam_left]
-    )
+    T_cam_to_rig = pose_to_matrix(*traj_data["sensor_to_trajectory_poses"][cam_left])
     T_rig_to_world = pose_to_matrix(*interpolate_pose(traj_data, timestamp))
     T_cam_to_world = T_rig_to_world @ T_cam_to_rig
 
-    pts_world = (
-        T_cam_to_world @ np.hstack([pts3d, np.ones((pts3d.shape[0], 1))]).T
-    ).T[:, :3]
+    pts_world = (T_cam_to_world @ np.hstack([pts3d, np.ones((pts3d.shape[0], 1))]).T).T[:, :3]
 
     rect_pair = np.concatenate((rect_l, rect_r), axis=1)
     for h in range(0, rect_pair.shape[0], 50):
@@ -783,13 +727,15 @@ def visualize_laz(
 ):
     global REFERENCE_VEHICLE_POSE, ROAD_PLANE_NORMAL, ROAD_PLANE_POINT
 
-    index = json.load(open(file_path + ".index.json"))["entries"]
+    with open(file_path + ".index.json") as index_file:
+        index = json.load(index_file)["entries"]
     index.sort(key=lambda e: e["end_ts"])
     if any(e["part_index"] != 0 for e in index):
         raise RuntimeError("Multipart LAZ not supported yet.")
 
     # Optional time filtering (seconds)
     if time_start is not None or time_end is not None:
+
         def in_range(e):
             t_sec = e["end_ts"] / 1e6
             if time_start is not None and t_sec < time_start:
@@ -802,12 +748,12 @@ def visualize_laz(
     else:
         filtered_index = index
 
-    print(
-        f"Processing {len(filtered_index)} entries (of {len(index)} total)"
-    )
+    print(f"Processing {len(filtered_index)} entries (of {len(index)} total)")
     if not filtered_index:
         print("No LAZ entries in selected time range.")
         return
+    if time_start is not None:
+        image_buffer.get_images_up_to(int(time_start * 1e6) - 1)
 
     # Point accumulation per laser
     accumulated_points = {}
@@ -830,17 +776,10 @@ def visualize_laz(
         ROAD_PLANE_NORMAL = road_plane_normal
         ROAD_PLANE_POINT = road_plane_point
 
-        print(
-            f"Using fixed reference vehicle pose from timestamp "
-            f"{first_entry_ts / 1e6:.2f}s"
-        )
+        print(f"Using fixed reference vehicle pose from timestamp {first_entry_ts / 1e6:.2f}s")
         print(f"Reference vehicle pose: {reference_vehicle_pose}")
-        print(
-            f"Final road plane normal (vehicle coords): {road_plane_normal}"
-        )
-        print(
-            f"Final road plane point (vehicle coords): {road_plane_point}"
-        )
+        print(f"Final road plane normal (vehicle coords): {road_plane_normal}")
+        print(f"Final road plane point (vehicle coords): {road_plane_point}")
 
     with laspy.open(file_path) as las:
         las.seek(0)
@@ -887,7 +826,7 @@ def visualize_laz(
                 )
                 if load_dense_depth:
                     send_dense_depth(
-                        int(os.path.basename(cam_frame_path).split("_")[-1]),
+                        int(Path(cam_frame_path).stem.split("_")[-1]),
                         cam_name,
                         camera_info,
                         traj_data,
@@ -898,7 +837,7 @@ def visualize_laz(
                 grouped = defaultdict(dict)
                 for t_img, cam_name, cam_frame_path in images:
                     grouped[t_img][cam_name] = (t_img, cam_name, cam_frame_path)
-                for ts, cams in grouped.items():
+                for cams in grouped.values():
                     if cam_left in cams and cam_right in cams:
                         stereo_rectification(traj_data, cams[cam_left], cams[cam_right])
 
@@ -910,27 +849,17 @@ def visualize_laz(
             if accumulate_points:
                 if laser_name not in accumulated_points:
                     accumulated_points[laser_name] = coords
-                    accumulated_colors[laser_name] = (
-                        colors.copy() if colors is not None else None
-                    )
-                    accumulated_timestamps[laser_name] = np.full(
-                        len(coords), current_time
-                    )
+                    accumulated_colors[laser_name] = colors.copy() if colors is not None else None
+                    accumulated_timestamps[laser_name] = np.full(len(coords), current_time)
                 else:
                     # Remove older than window
                     mask = (
                         current_time - accumulated_timestamps[laser_name]
                     ) <= ACCUMULATION_WINDOW
-                    accumulated_points[laser_name] = accumulated_points[
-                        laser_name
-                    ][mask]
+                    accumulated_points[laser_name] = accumulated_points[laser_name][mask]
                     if accumulated_colors[laser_name] is not None:
-                        accumulated_colors[laser_name] = accumulated_colors[
-                            laser_name
-                        ][mask]
-                    accumulated_timestamps[laser_name] = accumulated_timestamps[
-                        laser_name
-                    ][mask]
+                        accumulated_colors[laser_name] = accumulated_colors[laser_name][mask]
+                    accumulated_timestamps[laser_name] = accumulated_timestamps[laser_name][mask]
 
                     # Append new
                     accumulated_points[laser_name] = np.vstack(
@@ -975,15 +904,13 @@ def run_viz(
     send_agg_depth_flag: bool = False,
     accumulate_points: bool = False,
     color_by_height: bool = False,
-    time_start: float = None,
-    time_end: float = None,
+    time_start: float | None = None,
+    time_end: float | None = None,
     height_range: tuple = (-0.5, 0.5),
 ):
     rr.init("Data Vis", spawn=True)
 
-    wheel_excitement_path = os.path.join(
-        base_dir, "export/wheel_excitement.json"
-    )
+    wheel_excitement_path = os.path.join(base_dir, "export/wheel_excitement.json")
     has_wheel_excitement = os.path.isfile(wheel_excitement_path)
 
     optional_views = []
@@ -1005,9 +932,7 @@ def run_viz(
 
     if has_wheel_excitement:
         optional_views.append(
-            rrb.TimeSeriesView(
-                origin="/wheel_excitement/excitement", name="Wheel excitement"
-            )
+            rrb.TimeSeriesView(origin="/wheel_excitement/excitement", name="Wheel excitement")
         )
         rr.log(
             "/wheel_excitement/excitement/FL",
@@ -1061,18 +986,18 @@ def run_viz(
                         origin="/imu/accel",
                         name="Accel",
                         overrides={
-                            "/imu/accel/0": [rr.components.Color([255, 0, 0])],
-                            "/imu/accel/1": [rr.components.Color([0, 255, 0])],
-                            "/imu/accel/2": [rr.components.Color([0, 0, 255])],
+                            "/imu/accel/0": [SeriesLines(colors=[255, 0, 0])],
+                            "/imu/accel/1": [SeriesLines(colors=[0, 255, 0])],
+                            "/imu/accel/2": [SeriesLines(colors=[0, 0, 255])],
                         },
                     ),
                     rrb.TimeSeriesView(
                         origin="/imu/gyro",
                         name="Gyro",
                         overrides={
-                            "/imu/gyro/0": [rr.components.Color([255, 0, 0])],
-                            "/imu/gyro/1": [rr.components.Color([0, 255, 0])],
-                            "/imu/gyro/2": [rr.components.Color([0, 0, 255])],
+                            "/imu/gyro/0": [SeriesLines(colors=[255, 0, 0])],
+                            "/imu/gyro/1": [SeriesLines(colors=[0, 255, 0])],
+                            "/imu/gyro/2": [SeriesLines(colors=[0, 0, 255])],
                         },
                     ),
                 ),
@@ -1091,9 +1016,7 @@ def run_viz(
         static=True,
     )
 
-    with open(
-        os.path.join(base_dir, "export/output.laz.sensor_export.json"), "r"
-    ) as f:
+    with open(os.path.join(base_dir, "export/output.laz.sensor_export.json"), "r") as f:
         sensor_export = json.load(f)
     rr_send_gps_data(sensor_export)
     rr_send_imu_data(sensor_export)
@@ -1102,18 +1025,14 @@ def run_viz(
         with open(wheel_excitement_path, "r") as f:
             rr_send_wheel_excitement(json.load(f))
 
-    with open(
-        os.path.join(base_dir, "export/output.laz.trajectory.json"), "r"
-    ) as f:
+    with open(os.path.join(base_dir, "export/output.laz.trajectory.json"), "r") as f:
         traj_data = json.load(f)
 
     rr_send_sensor_extrinsics(traj_data)
     rr_send_rig_trajectory(traj_data)
 
     dir_img = os.path.join(base_dir, "img")
-    image_buffer = get_dataset_image_buffer(
-        traj_data, dir_img, subsample=subsample_cam
-    )
+    image_buffer = get_dataset_image_buffer(traj_data, dir_img, subsample=subsample_cam)
 
     visualize_laz(
         os.path.join(base_dir, "export/output.laz"),
@@ -1135,7 +1054,6 @@ def run_viz(
 
 def cli_main():
     import argparse
-    from rerun_vis import run_viz
 
     p = argparse.ArgumentParser("card-viz")
     p.add_argument("dataset_dir", type=str)
@@ -1169,8 +1087,7 @@ def cli_main():
         nargs=2,
         type=float,
         default=[0.0, 0.5],
-        help="Height range relative to ground plane [min max] in meters "
-        "(default: 0.0 0.5)",
+        help="Height range relative to ground plane [min max] in meters (default: 0.0 0.5)",
     )
 
     args = p.parse_args()
