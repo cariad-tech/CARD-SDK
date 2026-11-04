@@ -278,7 +278,10 @@ class UnifiedCardDataset(Dataset):
     def _K_dist_from_traj(traj: Dict, cam: str):
         ci = traj["camera_infos"][cam]
         K = np.array([[ci["fx"], 0, ci["cx"]], [0, ci["fy"], ci["cy"]], [0, 0, 1]], np.float32)
-        dist = np.array(ci.get("dist_coeffs", [0, 0, 0, 0, 0]), np.float32)
+        dist_coeffs = ci.get("dist_coeffs")
+        if dist_coeffs is None:
+            raise ValueError(f"Missing distortion coefficients for camera {cam}")
+        dist = np.asarray(dist_coeffs, dtype=np.float32)
         return K, dist
 
     @staticmethod

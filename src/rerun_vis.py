@@ -20,8 +20,8 @@ from rerun.archetypes.series_lines import SeriesLines
 def _quat_xyzw_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
     """Convert a unit quaternion (x,y,z,w) to a 3x3 rotation matrix."""
     n = x * x + y * y + z * z + w * w
-    if n < 1e-10:
-        return np.eye(3, dtype=np.float64)
+    if not np.isfinite(n) or n < 1e-10:
+        raise ValueError("Quaternion must have a finite, non-zero norm")
     s = 2.0 / n
     wx, wy, wz = w * x * s, w * y * s, w * z * s
     xx, xy, xz = x * x * s, x * y * s, x * z * s
