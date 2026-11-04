@@ -32,6 +32,21 @@ python -m pip install ".[torch,viz]"
 Use only `torch` for the dataloader, only `viz` for Rerun, or neither extra
 for downloading alone.
 
+The installed SDK includes the CARD loader and downloader packages. The loader
+is a comprehensive, extensible reference implementation for CARD workflows.
+It provides RGB, optional depth and labels, camera
+calibration, poses, temporal neighbors, stereo metadata, synchronized
+augmentation, batching, and optional ground-plane information. These building
+blocks can be reused for future CARD applications or adapted to other datasets;
+they do not imply support for arbitrary dataset formats or future tasks.
+
+**The loader prioritizes functionality and clarity over speed.** It can be
+slow, especially with multiple modalities, temporal neighbors, and geometry
+processing enabled, and is not intended as a drop-in, high-throughput training
+pipeline. Use it to understand the data and as a starting point for your own
+domain-specific loader: select the functions you need, disable unused features,
+and adapt preprocessing, caching, and data loading to your training workload.
+
 ## Repository Layout
 
 - [card_dataset](card_dataset): dataloader and synchronized augmentations.
@@ -41,14 +56,21 @@ for downloading alone.
 - [splits](splits): training, validation, test, and small-sample image lists.
 - [demo.ipynb](demo.ipynb): interactive depth and height examples.
 
+
 ## Download
 
-Authenticate with a Hugging Face token that has read access, then download:
+The datasets are gated. Request access and accept the terms for each batch
+you need under [CARD-Data on Hugging Face](https://huggingface.co/CARD-Data),
+then authenticate with a read-enabled token from that same approved account:
 
 ```bash
 hf auth login
 python -m download.download_from_hf --output-dir ./data
 ```
+
+A `401` or `403` response means authentication or dataset access is missing;
+logging in alone does not grant access to a gated dataset. A `429` response
+indicates Hugging Face rate limiting.
 
 To select batches, add `--repos` followed by any of `germany_batch1`,
 `germany_batch2`, `germany_batch3`, or `italy`. Add `--check` to compare local
@@ -101,20 +123,52 @@ print(frame["rgb"].shape)
 
 Use `for_training` with `train.txt` for augmented training samples, or
 `for_inference` with `val.txt` or `test.txt` for evaluation.
+`for_training` configures training-oriented outputs and augmentations; it
+does not make the reference loader optimized for training throughput.
 
 The loader reads precomputed NPZ depth; it does not generate depth from raw
-LAZ files. Missing optional modalities are `None`. Corrupt files and invalid
-image paths raise errors.
+LAZ files. Missing optional modalities are `None`. Existing archives with
+unsupported keys or invalid dimensions, invalid paths, and timestamps outside
+trajectory coverage raise errors instead of returning substitute data.
+
+`lidar_sparse` reads `sparse_ground_truth`; `depth_agg` normally projects
+`agg_depth/cam_1` camera-frame points. `depth_single` is only populated when
+the optional `single_depth/<camera>` export exists. It is not an alias for
+dense predictions.
+
+If you have your own depth folder, optionally pass
+`agg_depth_variant="my_depth"` or `--agg_depth_variant my_depth` in either
+preview script. Files are loaded from
+`<sequence>/my_depth/<camera>/<camera>_<timestamp>.npz` and populate
+`depth_agg`. Archives must contain a metric `depth` map in the original
+pinhole camera frame, or metric camera-frame `pts_cam` points. A selected
+center file is required: missing files raise `FileNotFoundError`.
+Missing maps are not synthesized or replaced with other predictions.
+
+At sequence boundaries, unavailable neighbor offsets are omitted from both
+`frames` and `rel_poses_to_center`. Every returned neighbor has a pose. Collation retains sample alignment; mixed present and absent fields remain lists. An empty/all-`None` batch raises an error.
+Missing stereo pairs are reported by a warning and `item["stereo"] is `None`.
+Insufficient training sparse supervision raises an error; samples are not
+silently dropped.
+
+Image flips preserve physical camera coordinates and all camera/world poses.
+The reflected intrinsics have negative `K[0, 0]`; backprojection must use the
+returned signed intrinsics, not their absolute values. Stereo rectification
+metadata describes the original calibration, not the augmented images.
+Color/crop/flip parameters are synchronized within each sample using a local
+seed stream without changing the caller's Python or Torch RNG state. For
+reproducible multiworker loading, also seed the DataLoader's generator.
 
 Augmented training is intended for depth learning. Bounding-box labels are
-omitted when augmentations are enabled; detection-label augmentation is not
+omitted when geometric augmentations are enabled; detection-label augmentation is not
 implemented.
 
-Ground-plane data is optional (`load_ground_plane_info=True`). Germany
-Batch 1 lacks wheel-contact calibration, so its plane is an estimate, marked
-`ground_plane_info["source"] == "vehicle_height_estimate"`, not ground truth.
-Other batches' `_ground` and `_Ground` key spellings are matched
-case-insensitively.
+### Ground Plane
+
+Enable `load_ground_plane_info=True` to fit a local plane from wheel
+ground-contact trajectories, or fixed ground-contact extrinsics when
+trajectories are absent. Germany Batch 1 lacks the fixed ground-contact
+extrinsics; its road plane uses the exported contact trajectories instead.
 
 ## Visualize
 
@@ -123,6 +177,12 @@ Open a sequence in Rerun:
 ```bash
 card-viz /path/to/sequence --send-agg-depth-flag
 ```
+
+For a headless local recording, add `--save output.rrd`. Use
+`--load-dense-depth` to read metric depth maps from `depth/<camera>`.
+Add `--dense-depth-dir my_depth` for another folder under the sequence, or
+provide an absolute path. Missing optional camera depth exports are warned
+about, not replaced by other predictions or aggregate points.
 
 Save a sample's images and depth reprojections:
 
@@ -176,10 +236,13 @@ export CARD_SPLIT_FILE="$PWD/splits/small_samples.txt"
 ```
 
 The notebook requires precomputed depth files and both installation extras.
+It also requires a Jupyter environment with `ipykernel`; select the SDK's
+Python environment as the notebook kernel.
 
 ## License
 
 - SDK: [MIT](LICENSE).
+- Declared Python dependencies and their licenses: [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 - Germany data: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - Italy data: [CC BY NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
 
