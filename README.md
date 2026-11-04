@@ -1,9 +1,7 @@
 # CARD SDK
 
 <div align="center">
-<a href="https://github.com/user-attachments/assets/8be376b4-11b6-4e01-956a-d0d4f064d1db"><img src="gifs/card_montage_left_preview.gif" alt="CARD driving sequences - left montage" width="32%"/></a>
-<img src="gifs/card_logo_banner.png" alt="CARD Dataset Logo" width="32%"/>
-<a href="https://github.com/user-attachments/assets/f1c99f96-e121-42d2-bed6-1045ec6b6669"><img src="gifs/card_montage_right_preview.gif" alt="CARD driving sequences - right montage" width="32%"/></a>
+<a href="https://github.com/user-attachments/assets/8be376b4-11b6-4e01-956a-d0d4f064d1db"><img src="gifs/card_montage_left_preview.gif" alt="CARD driving sequences - left montage" height="106"/></a><img src="gifs/card_logo_square.png" alt="CARD Dataset Logo" height="106"/><a href="https://github.com/user-attachments/assets/f1c99f96-e121-42d2-bed6-1045ec6b6669"><img src="gifs/card_montage_right_preview.gif" alt="CARD driving sequences - right montage" height="106"/></a>
 <p>
 <a href="https://openaccess.thecvf.com/content/CVPR2026/html/Elazab_CARD_A_Multi-Modal_Automotive_Dataset_for_Dense_3D_Reconstruction_in_CVPR_2026_paper.html" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Paper-CVPR%202026-b31b1b" alt="Paper - CVPR 2026"/></a>
 <a href="https://card.content.cariad.digital/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Project_Page-CARD-00897B" alt="CARD Project Page"/></a>
