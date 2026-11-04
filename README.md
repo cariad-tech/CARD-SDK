@@ -1,5 +1,3 @@
-# CARD SDK
-
 <div align="center">
 <a href="https://github.com/user-attachments/assets/8be376b4-11b6-4e01-956a-d0d4f064d1db"><img src="gifs/card_montage_left_preview.gif" alt="CARD driving sequences - left montage" height="106"/></a><img src="gifs/card_logo_square.png" alt="CARD Dataset Logo" height="106"/><a href="https://github.com/user-attachments/assets/f1c99f96-e121-42d2-bed6-1045ec6b6669"><img src="gifs/card_montage_right_preview.gif" alt="CARD driving sequences - right montage" height="106"/></a>
 <p>
