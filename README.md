@@ -5,6 +5,7 @@
 <p>
 <a href="https://openaccess.thecvf.com/content/CVPR2026/html/Elazab_CARD_A_Multi-Modal_Automotive_Dataset_for_Dense_3D_Reconstruction_in_CVPR_2026_paper.html"><img src="https://img.shields.io/badge/Paper-CVPR%202026-B31B1B?style=for-the-badge" alt="Paper - CVPR 2026"/></a>
 <a href="https://card.content.cariad.digital/"><img src="https://img.shields.io/badge/Website-CARD-00897B?style=for-the-badge" alt="CARD Website"/></a>
+<a href="https://huggingface.co/CARD-Data"><img src="https://img.shields.io/badge/Data-CARD--Data-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Data - Hugging Face"/></a>
 </p>
 </div>
 
