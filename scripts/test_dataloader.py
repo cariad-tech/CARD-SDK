@@ -238,7 +238,7 @@ def run_single_visualization(ds, idx, out_dir, skip_projections):
             pts_w = transform(pts_c, T_cw)  # Cam -> World
 
             for off, nf in frames.items():
-                if off == 0:
+                if off == 0 or nf is None:
                     continue
                 # Project World -> Neighbor
                 T_nw = nf["T_cam_world"].numpy()
@@ -280,6 +280,7 @@ def main():
 
     # Dataset Config
     parser.add_argument("--load_ground_plane", action="store_true", help="Compute ground planes")
+    parser.add_argument("--agg_depth_variant", help="Optional depth folder to load instead of agg_depth (relative to each sequence)")
     parser.add_argument("--no_labels", action="store_true", help="Disable labels")
     parser.add_argument("--no_stereo", action="store_true", help="Disable stereo")
     parser.add_argument(
@@ -299,6 +300,7 @@ def main():
         load_ground_plane_info=args.load_ground_plane,
         load_labels=not args.no_labels,
         stereo=not args.no_stereo,
+        agg_depth_variant=args.agg_depth_variant,
     )
 
     if args.test_integrity:

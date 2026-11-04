@@ -102,9 +102,7 @@ class TorchGeoAug:
                 out_depths.append(None)
                 continue
             if d.ndim == 2 and d.shape[1] == 3:
-                points = d.copy()
-                points[:, 0] *= -1
-                out_depths.append(points)
+                out_depths.append(d)
                 continue
             t = torch.from_numpy(d.transpose(2, 0, 1))
             t = F.hflip(t)
@@ -112,7 +110,8 @@ class TorchGeoAug:
         # adjust K for horizontal flip
         K2 = None if K is None else K.copy()
         if K2 is not None:
-            K2[0, 2] = (W - 1) - K2[0, 2]
+            K2[0, :] *= -1
+            K2[0, 2] += W - 1
         return (rgb_np2, *out_depths, K2)
 
 

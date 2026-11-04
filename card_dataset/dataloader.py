@@ -13,9 +13,11 @@ import cv2
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation, Slerp
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from . import torch_augs as augs
+from .camera import undistort_bboxes
+from .ground_plane import road_plane_at
 
 
 # ---------- utilities ----------
@@ -75,7 +77,7 @@ def custom_collate_fn(batch: List[Any]) -> Any:
     """Batch valid samples without losing alignment of optional or variable-sized fields."""
     batch = [sample for sample in batch if sample is not None]
     if not batch:
-        return {}
+        raise ValueError("Cannot collate an empty batch or a batch containing only None")
 
     def collate(values):
         if all(value is None for value in values):
@@ -114,6 +116,8 @@ def custom_collate_fn(batch: List[Any]) -> Any:
 
 # ---------- pose math ----------
 def pose_to_matrix(x, y, z, qw, qx, qy, qz):
+    if not np.isfinite([x, y, z, qw, qx, qy, qz]).all():
+        raise ValueError("Pose components must be finite")
     R = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
     T = np.eye(4, dtype=np.float32)
     T[:3, :3] = R
@@ -132,6 +136,10 @@ def _slerp_scalar_first(q0, q1, t):
 
 def interpolate_pose(traj: Dict, ts_us: int):
     poses = traj["trajectory_poses"]
+    if not poses:
+        raise ValueError("Trajectory has no poses")
+    if not poses[0][0] <= ts_us <= poses[-1][0]:
+        raise ValueError(f"Timestamp {ts_us} is outside trajectory coverage")
     i = 0
     while i < len(poses) and poses[i][0] <= ts_us:
         i += 1
@@ -141,7 +149,9 @@ def interpolate_pose(traj: Dict, ts_us: int):
         return poses[-1][1]
     ts0, p0 = poses[i - 1]
     ts1, p1 = poses[i]
-    t = float(np.clip((ts_us - ts0) / max(1, (ts1 - ts0)), 0.0, 1.0))
+    if ts1 <= ts0:
+        raise ValueError("Trajectory timestamps must be strictly increasing")
+    t = (ts_us - ts0) / (ts1 - ts0)
     trans = (1.0 - t) * np.array(p0[:3]) + t * np.array(p1[:3])
     quat = _slerp_scalar_first(p0[3:], p1[3:], t)
     return [*trans.astype(float).tolist(), *quat]
@@ -162,7 +172,15 @@ def rel_pose(Tn_world, Tc_world):
 
 # ---------- dataset ----------
 class UnifiedCardDataset(Dataset):
-    """Load split-listed CARD images, precomputed depth, poses, and optional context."""
+    """Comprehensive CARD reference loader prioritizing functionality over speed.
+
+    Samples expose RGB, optional depth/labels, calibration, physical camera
+    poses, temporal/stereo context, and optional ground-plane information.
+    Applications can reuse these fields without changing the export readers.
+    This implementation can be slow and is not an optimized training pipeline.
+    Adapt the required functions, preprocessing, and I/O to each application's
+    domain and throughput requirements before using it for large-scale training.
+    """
 
     CAM_LEFT = "cam_1"
     CAM_RIGHT = "cam_0"
@@ -202,6 +220,12 @@ class UnifiedCardDataset(Dataset):
             raise ValueError("context_offsets must include the center frame (0)")
         if not 0 < min_depth < max_depth:
             raise ValueError("Depth bounds must satisfy 0 < min_depth < max_depth")
+        if not np.isfinite([min_depth, max_depth]).all():
+            raise ValueError("Depth bounds must be finite")
+        if mode not in ("train", "val", "test"):
+            raise ValueError("mode must be train, val, or test")
+        if len(set(self.context)) != len(self.context) or any(not isinstance(offset, int) for offset in self.context):
+            raise ValueError("context_offsets must contain unique integer offsets")
         self.stereo = stereo
         self.stereo_tol = stereo_time_tolerance_us
         self.min_sparse = min_sparse_points_train
@@ -212,7 +236,9 @@ class UnifiedCardDataset(Dataset):
         self.agg_depth_variant = agg_depth_variant
         self.min_depth, self.max_depth = min_depth, max_depth
 
-        random.seed(seed)
+        self.seed = seed
+        self._aug_random = random.Random(seed)
+        self._aug_worker = None
 
         self.rgb_mean = np.array(mean, dtype=np.float32)[None, None, :]
         self.rgb_std = np.array(std, dtype=np.float32)[None, None, :]
@@ -258,8 +284,8 @@ class UnifiedCardDataset(Dataset):
 
     def _seq_root_from_rel(self, rel: str) -> Path:
         parts = rel.replace("\\", "/").split("/img/")
-        if len(parts) < 2:
-            return self.base_root  # fallback
+        if len(parts) != 2 or not parts[0] or Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise ValueError(f"Expected a dataset-relative sequence/img/camera/image path: {rel}")
         return self.base_root / parts[0]
 
     # ----- RAM SAFE LOADING -----
@@ -268,7 +294,11 @@ class UnifiedCardDataset(Dataset):
     def _get_traj_cached(seq_root_str: str) -> Dict:
         traj_path = Path(seq_root_str) / "export" / "output.laz.trajectory.json"
         with open(traj_path, "r") as f:
-            return json.load(f)
+            traj = json.load(f)
+        timestamps = [pose[0] for pose in traj["trajectory_poses"]]
+        if not timestamps or any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
+            raise ValueError(f"Trajectory timestamps must be nonempty and strictly increasing: {traj_path}")
+        return traj
 
     def _get_traj(self, seq_root: Path) -> Dict:
         return self._get_traj_cached(str(seq_root))
@@ -291,7 +321,7 @@ class UnifiedCardDataset(Dataset):
 
     def _T_cam_world(self, traj: Dict, cam: str, ts_img_us: int):
         ci = traj["camera_infos"][cam]
-        ts = ts_img_us + ci.get("timestamp_offset", 0)
+        ts = ts_img_us + ci["timestamp_offset"]
         x, y, z, qw, qx, qy, qz = interpolate_pose(traj, ts)
         T_rig_world = pose_to_matrix(x, y, z, qw, qx, qy, qz)
         T_cam_rig = self._T_cam_to_rig_from_traj(traj, cam)
@@ -313,7 +343,14 @@ class UnifiedCardDataset(Dataset):
         R_lr, t_lr = UnifiedCardDataset._relative_cam_extrinsics(traj, cam_left, cam_right)
         image_size = (int(ci_l["image_width"]), int(ci_l["image_height"]))
         R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
-            K_l, dist_l, K_r, dist_r, image_size, R_lr, t_lr, flags=cv2.CALIB_ZERO_DISPARITY
+            K_l.astype(np.float64),
+            dist_l.astype(np.float64),
+            K_r.astype(np.float64),
+            dist_r.astype(np.float64),
+            image_size,
+            R_lr.astype(np.float64),
+            t_lr.astype(np.float64).reshape(3, 1),
+            flags=cv2.CALIB_ZERO_DISPARITY,
         )
         return {
             "K_left": K_l.astype(np.float32),
@@ -368,7 +405,7 @@ class UnifiedCardDataset(Dataset):
             key = f"{cam}_{ts}"
             arr = archive[key] if key in archive else archive.get("depth")
         if arr is None:
-            return None
+            raise ValueError(f"Depth archive has no supported depth key: {p}")
         return self._prepare_depth(arr)
 
     def _load_single(self, seq_root: Path, cam: str, ts: int, K: np.ndarray, H: int, W: int):
@@ -381,7 +418,7 @@ class UnifiedCardDataset(Dataset):
             elif "pts_cam" in archive:
                 dep = _project_pts_to_depth(archive["pts_cam"].astype(np.float32), K, (H, W))
             else:
-                return None
+                raise ValueError(f"Depth archive must contain depth or pts_cam: {p}")
         return self._prepare_depth(dep)
 
     def _load_agg(
@@ -407,14 +444,14 @@ class UnifiedCardDataset(Dataset):
                 dep = archive["depth"].astype(np.float32)
                 dense = True
             else:
-                return None
+                raise ValueError(f"Depth archive must contain depth or pts_cam: {p}")
         if dense:
-            # Dense depth map (e.g. fs_dense_depth_aligned). It lives in a pinhole frame with the
+            # Dense depth maps live in a pinhole frame with the
             # raw intrinsics K_dense, while the image was undistorted to K, so resample it into
             # K's frame: x_dense = K_dense @ inv(K) @ x. Same camera centre and rotation, so the
             # depth values themselves are unchanged.
             if dep.shape[:2] != (H, W):
-                return None
+                raise ValueError(f"Depth shape {dep.shape} does not match image {(H, W)}: {p}")
             if K_dense is not None and not np.allclose(K_dense, K):
                 M = K_dense.astype(np.float64) @ np.linalg.inv(K.astype(np.float64))
                 dep = cv2.warpPerspective(
@@ -436,14 +473,12 @@ class UnifiedCardDataset(Dataset):
             seq_root / "sparse_lidar" / cam,
             seq_root / "lidar_sparse" / cam,
         ]
-        npz = None
-        for r in roots:
-            p = r / f"{cam}_{ts}.npz"
-            if p.is_file():
-                npz = p
-                break
-        if npz is None:
+        candidates = [root / f"{cam}_{ts}.npz" for root in roots if (root / f"{cam}_{ts}.npz").is_file()]
+        if not candidates:
             return None, None
+        if len(candidates) != 1:
+            raise ValueError(f"Ambiguous single-LiDAR depth exports: {candidates}")
+        npz = candidates[0]
 
         with np.load(npz, allow_pickle=False) as archive:
             pts_cam = archive.get("pts_cam")
@@ -455,7 +490,7 @@ class UnifiedCardDataset(Dataset):
         elif dep is not None:
             dep = dep.astype(np.float32)
         else:
-            return None, pts_cam
+            raise ValueError(f"Depth archive must contain depth or pts_cam: {npz}")
 
         return self._prepare_depth(dep), pts_cam
 
@@ -471,97 +506,21 @@ class UnifiedCardDataset(Dataset):
         with open(p, "r") as f:
             for line in f:
                 a = line.strip().split()
-                if len(a) == 5:
-                    cls, x_c, y_c, bw, bh = map(float, a)
-                    x1, y1 = int((x_c * w) - (bw * w) / 2), int((y_c * h) - (bh * h) / 2)
-                    x2, y2 = int((x_c * w) + (bw * w) / 2), int((y_c * h) + (bh * h) / 2)
-                    out.append({"class": int(cls), "bbox": (x1, y1, x2, y2)})
+                if not a:
+                    continue
+                if len(a) != 5:
+                    raise ValueError(f"Expected class and four normalized box values: {p}")
+                cls, x_c, y_c, bw, bh = map(float, a)
+                if not np.isfinite([cls, x_c, y_c, bw, bh]).all() or cls < 0 or cls != int(cls) or not (0 <= x_c <= 1 and 0 <= y_c <= 1 and 0 < bw <= 1 and 0 < bh <= 1):
+                    raise ValueError(f"Invalid YOLO bounding box: {p}")
+                x1, y1 = (x_c - bw / 2) * w, (y_c - bh / 2) * h
+                x2, y2 = (x_c + bw / 2) * w, (y_c + bh / 2) * h
+                out.append({"class": int(cls), "bbox": (x1, y1, x2, y2)})
         return out
 
-    def _compute_road_plane_from_wheels(self, traj: Dict, timestamp_us: int):
-        """Compute road plane from wheel ground contact points at a specific timestamp."""
-        wheel_ground_keys = [
-            "cariad_wheel_FL_ground",
-            "cariad_wheel_FR_ground",
-            "cariad_wheel_RL_ground",
-            "cariad_wheel_RR_ground",
-        ]
-        wheel_ground_keys = [key.lower() for key in wheel_ground_keys]
-
-        wheel_points_world = []
-        wheel_trajectories = {
-            key.lower(): value for key, value in traj.get("wheel_trajectories", {}).items()
-        }
-        sensor_poses = {
-            key.lower(): value for key, value in traj.get("sensor_to_trajectory_poses", {}).items()
-        }
-
-        # Check if wheel trajectories exist (time-varying positions)
-        if wheel_trajectories:
-            # Use wheel_trajectories if available (true time-varying wheel positions)
-            for wheel_key in wheel_ground_keys:
-                if wheel_key in wheel_trajectories:
-                    wheel_traj = wheel_trajectories[wheel_key]
-                    wheel_pose = interpolate_pose({"trajectory_poses": wheel_traj}, timestamp_us)
-                    wheel_point = np.array([wheel_pose[0], wheel_pose[1], wheel_pose[2]])
-                    wheel_points_world.append(wheel_point)
-
-        # If no time-varying wheel trajectories, use static positions transformed to world coordinates
-        if len(wheel_points_world) == 0:
-            for wheel_key in wheel_ground_keys:
-                if wheel_key in sensor_poses:
-                    # Static wheel position in vehicle/rig coordinates
-                    wheel_pose = sensor_poses[wheel_key]
-
-                    # Transform static wheel position to world coordinates at current timestamp
-                    vehicle_pose = interpolate_pose(traj, timestamp_us)
-                    T_vehicle_to_world = pose_to_matrix(*vehicle_pose)
-
-                    # Create homogeneous coordinates for the wheel position
-                    wheel_vehicle = np.array([wheel_pose[0], wheel_pose[1], wheel_pose[2], 1.0])
-                    wheel_world = (T_vehicle_to_world @ wheel_vehicle)[:3]
-                    wheel_points_world.append(wheel_world)
-
-        if len(wheel_points_world) < 3:
-            warnings.warn(
-                "Wheel ground-contact calibration is unavailable; using a horizontal plane "
-                "1.8 m below the vehicle. This is an estimate, not wheel-derived ground truth.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            # Default: horizontal plane at a reasonable height below vehicle
-            vehicle_pose = interpolate_pose(traj, timestamp_us)
-            vehicle_z = vehicle_pose[2]
-            default_ground_z = vehicle_z - 1.8  # 1.8m below vehicle center
-            default_point = np.array(
-                [vehicle_pose[0], vehicle_pose[1], default_ground_z], dtype=np.float32
-            )
-            return (
-                np.array([0, 0, 1], dtype=np.float32),
-                default_point,
-                np.array([default_point], dtype=np.float32),
-            )
-
-        wheel_points_world = np.array(wheel_points_world)
-
-        # Fit a plane through the wheel contact points in world coordinates
-        # Use SVD to find the best-fit plane
-        centroid_world = np.mean(wheel_points_world, axis=0)
-        points_centered = wheel_points_world - centroid_world
-
-        # SVD to find the plane normal (smallest singular vector)
-        _, _, vh = np.linalg.svd(points_centered)
-        normal_world = vh[-1]  # Last row of V^T is the normal vector with smallest singular value
-
-        # Ensure normal points "up" (positive z component in world coordinates)
-        if normal_world[2] < 0:
-            normal_world = -normal_world
-
-        return (
-            normal_world.astype(np.float32),
-            centroid_world.astype(np.float32),
-            wheel_points_world.astype(np.float32),
-        )
+    def _compute_road_plane_from_wheels(self, traj: Dict, timestamp_us: int, seq_root: Path):
+        rig_to_world = pose_to_matrix(*interpolate_pose(traj, timestamp_us))
+        return road_plane_at(traj, seq_root, timestamp_us, rig_to_world)
 
     def _compute_camera_height_from_ground_plane(self, traj, cam, ts, norm, pt):
         Tcw = self._T_cam_world(traj, cam, ts)
@@ -579,145 +538,49 @@ class UnifiedCardDataset(Dataset):
         random.setstate(state[0])
         torch.set_rng_state(state[1])
 
-    def _last_aug_flipped(self) -> bool:
-        return any(getattr(t, "last_flipped", False) for t in self.aug_geo.transforms)
+    def _sample_aug_rng(self):
+        worker = get_worker_info()
+        worker_key = None if worker is None else (worker.id, worker.seed)
+        if worker_key != self._aug_worker:
+            self._aug_random = random.Random(self.seed + worker.seed)
+            self._aug_worker = worker_key
+        sample_seed = self._aug_random.randrange(2**63)
+        return random.Random(sample_seed).getstate(), torch.Generator().manual_seed(sample_seed).get_state()
 
-    def _apply_augs_and_crop(
-        self,
-        rgb_uint8: np.ndarray,
-        depth_like: Dict[str, np.ndarray],
-        K: np.ndarray,
-        labels=None,
-        lidar_pts_cam=None,
-        rng_state=None,
-    ):
-        # Replaying the same RNG state gives every frame of a sample identical crop/flip/color params
-        if rng_state is not None:
-            self._restore_aug_rng(rng_state)
-
-        # 1) Color aug
-        # We pass K just to match the signature, though ColorAug ignores it
-        out = self.aug_rgb(rgb_uint8, K)
-        rgb1 = out[0]
-
-        # 2) Geometric aug (RRC + Flip)
-        # We pass EVERYTHING into the pipeline: RGB, Depths, Points, K
-        # The pipeline handles detecting what is what.
-
-        # Prepare list of inputs
-        depth_keys = list(depth_like.keys())
-        depth_values = [depth_like[k] for k in depth_keys]
-
-        # Inputs: RGB, *Depths, LidarPoints, K
-        # Note: We must handle None in lidar_pts_cam
-        aug_inputs = [rgb1] + depth_values + [lidar_pts_cam, K]
-
-        # Run Augmentation
-        aug_outputs = self.aug_geo(*aug_inputs)
-
-        # Unpack Outputs
-        rgb2 = aug_outputs[0]
-        # Middle items are depths
-        dvals = aug_outputs[1 : 1 + len(depth_values)]
-        # Second to last is Points
-        pts_aug = aug_outputs[-2]
-        # Last is K
-        newK = aug_outputs[-1]
-
-        # Reconstruct depth dictionary
-        dct_c = {k: v for k, v in zip(depth_keys, dvals)}
-
-        # 3) Labels Transformation
-        # Since RRC is non-deterministic (random crop), we cannot easily transform 2D bbox labels
-        # unless we pass them into the aug class.
-        # For MoGe (Depth training), we usually IGNORE labels or rely on them being approximately correct if only flipping.
-        # IF YOU NEED LABELS with RRC: You must update TorchRandomResizedCrop to handle bounding boxes.
-        # For now, we assume labels are not critical for depth training or only H-flip is used for labels.
-
-        final_labels = []
-        if labels:
-            # For inference (no augs), labels should be passed through
-            # For training with augs, labels may be inaccurate after random crop
-            # Check if augmentations are enabled by checking if aug_geo has transforms
-            has_augs = len(self.aug_geo.transforms) > 0 or len(self.aug_rgb.transforms) > 0
-
-            if not has_augs:
-                # Inference mode - pass labels through but SCALE them to match resized image
-                # Get original and target dimensions
-                # rgb2 is after augmentations (or same as rgb1 if no augs)
-                H_orig, W_orig = rgb2.shape[:2]
-                H_target, W_target = self.H, self.W  # target size
-
-                # Scale bboxes to match target size
-                scale_y = H_target / H_orig
-                scale_x = W_target / W_orig
-
-                final_labels = []
-                for label in labels:
-                    if "bbox" in label:
-                        x1, y1, x2, y2 = label["bbox"]
-                        # Scale coordinates
-                        x1_scaled = int(x1 * scale_x)
-                        y1_scaled = int(y1 * scale_y)
-                        x2_scaled = int(x2 * scale_x)
-                        y2_scaled = int(y2 * scale_y)
-
-                        # Clamp to image bounds
-                        x1_scaled = max(0, min(x1_scaled, W_target - 1))
-                        y1_scaled = max(0, min(y1_scaled, H_target - 1))
-                        x2_scaled = max(0, min(x2_scaled, W_target - 1))
-                        y2_scaled = max(0, min(y2_scaled, H_target - 1))
-
-                        final_labels.append(
-                            {
-                                "x1": x1_scaled,
-                                "y1": y1_scaled,
-                                "x2": x2_scaled,
-                                "y2": y2_scaled,
-                                "class": label.get("class", "object"),
-                                "bbox": (x1_scaled, y1_scaled, x2_scaled, y2_scaled),
-                            }
-                        )
-                    else:
-                        # Pass through labels without bbox field
-                        final_labels.append(label)
-            else:
-                # Training mode with augmentations - labels are not transformed
-                # You would need to implement bbox transformation here if needed
-                final_labels = []
-
-        # 4) Final Resize to Target Resolution
-        # Calculate scaling factors from current size to target size
-        H_current, W_current = rgb2.shape[:2]
-        scale_h = self.H / H_current
-        scale_w = self.W / W_current
-
-        rgb_c = cv2.resize(rgb2, (self.W, self.H), interpolation=cv2.INTER_LINEAR)
-
-        # Apply safety resize to depths (Nearest Neighbor)
-        for k, d in dct_c.items():
-            if d is not None:
-                drs = cv2.resize(d, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
-                if drs.ndim == 2:
-                    drs = drs[..., None]
-                dct_c[k] = drs
-
-        # CRITICAL: Scale intrinsics to match the resized image
-        if newK is not None:
-            newK = newK.copy()
-            newK[0, 0] *= scale_w  # fx
-            newK[0, 2] *= scale_w  # cx
-            newK[1, 1] *= scale_h  # fy
-            newK[1, 2] *= scale_h  # cy
-
-        return rgb_c, dct_c, newK, final_labels, pts_aug
+    def _apply_augs_and_crop(self, rgb_uint8, depth_like, K, labels=None, lidar_pts_cam=None, rng_state=None):
+        depth_keys = list(depth_like)
+        for key, depth in depth_like.items():
+            if depth.shape[:2] != rgb_uint8.shape[:2]:
+                raise ValueError(f"Depth {key} shape {depth.shape} does not match RGB {rgb_uint8.shape}")
+        original_rng = self._capture_aug_rng()
+        try:
+            if rng_state is not None:
+                self._restore_aug_rng(rng_state)
+            colored = self.aug_rgb(rgb_uint8, K)[0]
+            rgb, *transformed = self.aug_geo(colored, *depth_like.values(), lidar_pts_cam, K)
+        finally:
+            self._restore_aug_rng(original_rng)
+        points, intrinsics = transformed[-2:]
+        scale_x, scale_y = self.W / rgb.shape[1], self.H / rgb.shape[0]
+        depths = {}
+        for key, depth in zip(depth_keys, transformed[:-2]):
+            resized = cv2.resize(depth, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
+            depths[key] = resized[..., None] if resized.ndim == 2 else resized
+        intrinsics = intrinsics.copy()
+        intrinsics[0, :] *= scale_x
+        intrinsics[1, :] *= scale_y
+        final_labels = None if labels is None else []
+        if labels is not None and not self.aug_geo.transforms:
+            for label in labels:
+                bounds = np.asarray(label["bbox"]) * [scale_x, scale_y, scale_x, scale_y]
+                bounds = np.clip(bounds, 0, [self.W - 1, self.H - 1, self.W - 1, self.H - 1])
+                left, top, right, bottom = bounds
+                if right > left and bottom > top:
+                    final_labels.append({**label, "bbox": tuple(bounds), "x1": left, "y1": top, "x2": right, "y2": bottom})
+        return cv2.resize(rgb, (self.W, self.H), interpolation=cv2.INTER_LINEAR), depths, intrinsics, final_labels, points
 
     def _find_neighbors(self, idx: int, total: int, offsets: Tuple[int, ...]) -> Dict[int, int]:
-        out = {}
-        for off in offsets:
-            j = idx + off
-            out[off] = j if 0 <= j < total else (idx if off == 0 else -1)
-        return out
+        return {offset: idx + offset for offset in offsets if 0 <= idx + offset < total}
 
     def __len__(self):
         return len(self.centers)
@@ -739,12 +602,9 @@ class UnifiedCardDataset(Dataset):
             )
         cidx = ts_list.index(ts_center)
 
-        # One aug draw per sample, shared by all frames and both stereo cams
-        aug_rng = self._capture_aug_rng()
-        # Mirror matrix for camera-frame quantities under H-flip (X-Right, Y-Down, Z-Forward)
-        S_flip = np.diag([-1.0, 1.0, 1.0, 1.0]).astype(np.float32)
+        aug_rng = self._sample_aug_rng()
 
-        def build_cam_payload(cam_name: str, center_idx: int):
+        def build_cam_payload(cam_name: str, center_idx: int, require_agg=False):
             K_raw, dist_raw = self._K_dist_from_traj(traj, cam_name)
             neigh = self._find_neighbors(
                 center_idx, len(self._cam_dir_list(seq_root, cam_name)), self.context
@@ -775,16 +635,15 @@ class UnifiedCardDataset(Dataset):
             sparse_c = self._load_sparse(seq_root, cam_name, ts_c)
             single_c = self._load_single(seq_root, cam_name, ts_c, K0, H_raw, W_raw)
             agg_c = self._load_agg(seq_root, cam_name, ts_c, K0, dist0, H_raw, W_raw, K_dense=K_raw)
-            # An explicitly requested GT variant is required: a sample without it would hand the
-            # collate a None next to tensors, so drop it here instead.
-            if agg_c is None and self.agg_depth_variant:
-                return None
+            if agg_c is None and require_agg:
+                raise FileNotFoundError(f"Requested depth variant {self.agg_depth_variant} is missing for {cam_name}_{ts_c} in {seq_root}")
             lidar_d_c, lidar_p_c = self._load_single_lidar_sparse(
                 seq_root, cam_name, ts_c, K0, H_raw, W_raw
             )
             labels_c = (
                 self._load_labels(seq_root, cam_name, ts_c, path_c) if self.load_labels else None
             )
+            labels_c = undistort_bboxes(labels_c, K_raw, dist_raw, K0)
 
             depth_like = {}
             if sparse_c is not None:
@@ -800,7 +659,6 @@ class UnifiedCardDataset(Dataset):
             rgb_cc, dcts, Kc, labels_transformed, pts_c_aug = self._apply_augs_and_crop(
                 rgb_c_ud, depth_like, K0, labels_c, lidar_pts_cam=lidar_p_c, rng_state=aug_rng
             )
-            flipped = self._last_aug_flipped()
 
             if (
                 self.mode == "train"
@@ -808,12 +666,13 @@ class UnifiedCardDataset(Dataset):
                 and dcts["sparse"] is not None
                 and np.count_nonzero(dcts["sparse"]) < self.min_sparse
             ):
-                return None
+                raise ValueError(f"Insufficient sparse supervision for {cam_name}_{ts_c}: minimum {self.min_sparse} valid pixels required")
 
             # Ground Plane
             gp_info = None
             if self.load_ground_plane_info:
-                norm, pt, wh = self._compute_road_plane_from_wheels(traj, ts_c)
+                pose_timestamp = ts_c + traj["camera_infos"][cam_name]["timestamp_offset"]
+                norm, pt, wh, plane_source = self._compute_road_plane_from_wheels(traj, pose_timestamp, seq_root)
                 h_cam = self._compute_camera_height_from_ground_plane(
                     traj, cam_name, ts_c, norm, pt
                 )
@@ -828,11 +687,6 @@ class UnifiedCardDataset(Dataset):
                 nrm = np.linalg.norm(plane_normal_cam)
                 if nrm > 0:
                     plane_normal_cam = (plane_normal_cam / nrm).astype(np.float32)
-                if flipped:
-                    # Image (and depth/points) are mirrored, so the camera-frame plane must be too
-                    plane_point_cam[0] *= -1.0
-                    plane_normal_cam[0] *= -1.0
-
                 gp_info = {
                     "plane_normal_world": torch.from_numpy(norm.astype(np.float32)),
                     "plane_point_world": torch.from_numpy(pt.astype(np.float32)),
@@ -840,8 +694,8 @@ class UnifiedCardDataset(Dataset):
                     "plane_point_cam": torch.from_numpy(plane_point_cam.astype(np.float32)),
                     "wheel_points_world": torch.from_numpy(wh.astype(np.float32)),
                     "camera_height_above_ground": h_cam,
-                    "source": "wheel_contacts" if len(wh) >= 3 else "vehicle_height_estimate",
-                    "timestamp_us": ts_c,
+                    "source": plane_source,
+                    "timestamp_us": pose_timestamp,
                 }
 
             frames[0] = {
@@ -866,20 +720,6 @@ class UnifiedCardDataset(Dataset):
                 clist_full = self._cam_dir_list(seq_root, cam_name)
                 for off, nidx in neigh.items():
                     if off == 0:
-                        continue
-                    if nidx < 0:
-                        # Sequence boundary: fall back to the center frame with an identity
-                        # relative pose so every sample exposes the SAME neighbor offsets
-                        # (keeps custom_collate_fn happy). Photometric loss on this pair is ~0.
-                        frames[off] = {
-                            "timestamp_us": ts_c,
-                            "rgb": frames[0]["rgb"],
-                            "lidar_sparse": frames[0]["lidar_sparse"],
-                            "lidar_single_sparse": frames[0]["lidar_single_sparse"],
-                            "K": frames[0]["K"],
-                            "T_cam_world": frames[0]["T_cam_world"],
-                        }
-                        rels[off] = torch.eye(4, dtype=torch.float32)
                         continue
                     ts_n, path_n = clist_full[nidx]
                     rgb_n = _rgb(Path(path_n))
@@ -911,9 +751,6 @@ class UnifiedCardDataset(Dataset):
                         "T_cam_world": torch.from_numpy(Tcw_n.astype(np.float32)),
                     }
                     T_rel = rel_pose(Tcw_n, Tcw_c)
-                    if flipped:
-                        # Relative motion seen in mirrored images: S @ T @ S (still a proper SE3)
-                        T_rel = S_flip @ T_rel @ S_flip
                     rels[off] = torch.from_numpy(T_rel.astype(np.float32))
 
             return {
@@ -926,9 +763,7 @@ class UnifiedCardDataset(Dataset):
                 ),
             }
 
-        cam_payload = build_cam_payload(cam_center, cidx)
-        if cam_payload is None:
-            return None
+        cam_payload = build_cam_payload(cam_center, cidx, require_agg=bool(self.agg_depth_variant))
 
         out = {
             "meta": {
@@ -940,12 +775,14 @@ class UnifiedCardDataset(Dataset):
                 "center_relpath": rel,
                 "center_cam": cam_center,
                 "center_timestamp_us": ts_center,
+                "depth_agg_variant": self.agg_depth_variant or "agg_depth",
             },
             cam_center: cam_payload,
         }
 
         # Stereo
         if self.stereo:
+            out["stereo"] = None
             other = self.CAM_RIGHT if cam_center == self.CAM_LEFT else self.CAM_LEFT
             other_l = self._cam_dir_list(seq_root, other)
             # Find nearest
@@ -968,13 +805,6 @@ class UnifiedCardDataset(Dataset):
                     if left_cam in out and right_cam in out:
                         si = self._stereo_rectify_params(traj, left_cam, right_cam)
                         R_lr, t_lr = si["R_lr"], si["t_lr"]
-                        if self._last_aug_flipped():
-                            # Both cams share the flip; mirror the extrinsics to match the images
-                            S3 = S_flip[:3, :3]
-                            R_lr, t_lr = (
-                                (S3 @ R_lr @ S3).astype(np.float32),
-                                (S3 @ t_lr).astype(np.float32),
-                            )
                         out["stereo"] = {
                             "left_cam": left_cam,
                             "right_cam": right_cam,
@@ -986,6 +816,9 @@ class UnifiedCardDataset(Dataset):
                                 for k, v in si.items()
                             },
                         }
+
+            if out["stereo"] is None:
+                warnings.warn(f"No usable stereo pair within {self.stereo_tol} us for {rel}", RuntimeWarning, stacklevel=2)
 
         return out
 

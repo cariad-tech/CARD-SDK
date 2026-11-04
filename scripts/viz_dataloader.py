@@ -64,7 +64,10 @@ def depth_to_colormap(depth_chw, vmin=0.1, vmax=60.0):
 
 
 def overlay(img, cm, a=0.6):
-    return img if cm is None else (a * cm + (1 - a) * img).astype(np.uint8)
+    if cm is None:
+        return img
+    valid = np.any(cm != 255, axis=2, keepdims=True)
+    return np.where(valid, a * cm + (1 - a) * img, img).astype(np.uint8)
 
 
 def backproject(depth_chw, K_3x3):
@@ -246,6 +249,7 @@ def main():
         help="Path to a file in splits/ (absolute or relative to base_root)",
     )
     ap.add_argument("--idx", type=int, default=0, help="Sample index to visualize")
+    ap.add_argument("--agg_depth_variant", help="Optional depth folder to load instead of agg_depth (relative to each sequence)")
     ap.add_argument(
         "--out_dir", type=str, default="./viz_out", help="Output directory for visualizations"
     )
@@ -309,6 +313,7 @@ def main():
         load_ground_plane_info=args.load_ground_plane,
         stereo=not args.no_stereo,
         context_offsets=(-1, 0, +1) if not args.no_neighbors else (0,),
+        agg_depth_variant=args.agg_depth_variant,
     )
 
     init_time = time.time() - start_time
@@ -372,6 +377,7 @@ def main():
     gp = f0.get("ground_plane_info")
     if gp is not None:
         print("[info] Ground plane information available:")
+        print(f"  Source: {gp['source']}")
         print(f"  Plane normal (world coords): {gp['plane_normal_world']}")
         print(f"  Plane point (world coords): {gp['plane_point_world']}")
         print(f"  Camera height above ground: {gp['camera_height_above_ground']:.3f}m")
@@ -382,7 +388,7 @@ def main():
             f.write("Ground Plane Information\n")
             f.write("========================\n")
             f.write(
-                f"Computed from wheel ground contact points at timestamp {gp['timestamp_us']}\n\n"
+                f"Source: {gp['source']}\nPose timestamp: {gp['timestamp_us']} microseconds\n\n"
             )
             f.write(f"Plane normal (world coords): {gp['plane_normal_world']}\n")
             f.write(f"Plane point (world coords): {gp['plane_point_world']}\n")
@@ -390,20 +396,16 @@ def main():
                 f"Camera height above ground: {gp['camera_height_above_ground']:.6f} meters\n\n"
             )
             f.write("Wheel ground contact points (world coords):\n")
-            wheel_names = [
-                "FL (Front Left)",
-                "FR (Front Right)",
-                "RL (Rear Left)",
-                "RR (Rear Right)",
-            ]
             for i, point in enumerate(gp["wheel_points_world"]):
-                wheel_name = wheel_names[i] if i < len(wheel_names) else f"Wheel {i + 1}"
-                f.write(f"  {wheel_name}: ({point[0]:.6f}, {point[1]:.6f}, {point[2]:.6f})\n")
+                f.write(f"  Contact {i + 1}: ({point[0]:.6f}, {point[1]:.6f}, {point[2]:.6f})\n")
     else:
         print("[info] Ground plane information not available (use --load_ground_plane to enable)")
 
     # ---------- Neighbor frames information ----------
-    neighbor_count = sum(offset != 0 for offset in center_frames)
+    neighbor_count = sum(
+        offset != 0 and frame is not None
+        for offset, frame in center_frames.items()
+    )
     print(f"[info] Loaded {neighbor_count} neighbor frames")
 
     if neighbor_count > 0:
@@ -413,7 +415,7 @@ def main():
             f.write(f"Total neighbor frames: {neighbor_count}\n")
             f.write(f"Available frame offsets: {list(center_frames.keys())}\n\n")
             for offset, frame in center_frames.items():
-                if offset != 0:
+                if offset != 0 and frame is not None:
                     f.write(f"Frame at offset {offset:+d}:\n")
                     f.write(f"  Timestamp: {frame['timestamp_us']} microseconds\n")
                     f.write(f"  RGB shape: {frame['rgb'].shape}\n")
