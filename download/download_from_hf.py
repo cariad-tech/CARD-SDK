@@ -96,6 +96,10 @@ def check_repo(repo_id: str, local_dir: Path, token: Optional[str] = None):
         print(f"  Failed to fetch remote info: {e}")
         return False
 
+    if not remote_map:
+        print("  No dataset files found in remote metadata; verification failed.")
+        return False
+
     # 2. Check Local State
     missing = []
     mismatch = []
