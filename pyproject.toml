@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,10 +9,9 @@ description = "CARD dataset SDK: loading, download, and visualization utilities"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 # Core dependencies required for the dataloader and downloader.
-# All packages here are permissively licensed (Apache-2.0, BSD, MIT).
 dependencies = [
   "laspy==2.6.1",
   "lazrs==0.8.0",
@@ -29,7 +28,7 @@ viz = [
     "matplotlib>=3.9",
 ]
 # PyTorch integration for training pipelines.
-torch = ["torch>=2.4", "torchvision>=0.19"]
+torch = ["torch>=2.4", "torchvision>=0.19", "scipy>=1.11"]
 
 [project.scripts]
 card-viz = "rerun_vis:cli_main"
@@ -39,4 +38,5 @@ package = true
 
 [tool.setuptools]
 py-modules = ["rerun_vis"]
-package-dir = {"" = "src"}
+packages = ["card_dataset", "download", "scripts"]
+package-dir = {"" = "src", "card_dataset" = "card_dataset", "download" = "download", "scripts" = "scripts"}
