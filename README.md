@@ -1,7 +1,9 @@
 # CARD SDK
 
 <div align="center">
-<img src="gifs/LOGO_main.png" alt="CARD Dataset Logo - Scenes Included" width="25%"/>
+<a href="https://github.com/user-attachments/assets/8be376b4-11b6-4e01-956a-d0d4f064d1db"><img src="gifs/card_montage_left_preview.gif" alt="CARD driving sequences - left montage" width="32%"/></a>
+<img src="gifs/card_logo_banner.png" alt="CARD Dataset Logo" width="32%"/>
+<a href="https://github.com/user-attachments/assets/f1c99f96-e121-42d2-bed6-1045ec6b6669"><img src="gifs/card_montage_right_preview.gif" alt="CARD driving sequences - right montage" width="32%"/></a>
 <p>
 <a href="https://openaccess.thecvf.com/content/CVPR2026/html/Elazab_CARD_A_Multi-Modal_Automotive_Dataset_for_Dense_3D_Reconstruction_in_CVPR_2026_paper.html" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Paper-CVPR%202026-b31b1b" alt="Paper - CVPR 2026"/></a>
 <a href="https://card.content.cariad.digital/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Project_Page-CARD-00897B" alt="CARD Project Page"/></a>
@@ -43,7 +45,8 @@ they do not imply support for arbitrary dataset formats or future tasks.
 **The loader prioritizes functionality and clarity over speed.** It can be
 slow, especially with multiple modalities, temporal neighbors, and geometry
 processing enabled, and is not intended as a drop-in, high-throughput training
-pipeline. Use it to understand the data and as a starting point for your own
+pipeline. As we are in the age of agentic coding, ask your favourite agent to 
+use this dataloader to understand the data and as a starting point for your own
 domain-specific loader: select the functions you need, disable unused features,
 and adapt preprocessing, caching, and data loading to your training workload.
 
@@ -124,7 +127,8 @@ print(frame["rgb"].shape)
 Use `for_training` with `train.txt` for augmented training samples, or
 `for_inference` with `val.txt` or `test.txt` for evaluation.
 `for_training` configures training-oriented outputs and augmentations; it
-does not make the reference loader optimized for training throughput.
+does not make the reference loader optimized for training throughput, as
+one would rarely needs all these modalities in training.
 
 The loader reads precomputed NPZ depth; it does not generate depth from raw
 LAZ files. Missing optional modalities are `None`. Existing archives with
