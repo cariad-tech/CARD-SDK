@@ -36,17 +36,8 @@ The installed SDK includes the CARD loader and downloader packages. The loader
 is a comprehensive, extensible reference implementation for CARD workflows.
 It provides RGB, optional depth and labels, camera
 calibration, poses, temporal neighbors, stereo metadata, synchronized
-augmentation, batching, and optional ground-plane information. These building
-blocks can be reused for future CARD applications or adapted to other datasets;
-they do not imply support for arbitrary dataset formats or future tasks.
-
-**The loader prioritizes functionality and clarity over speed.** It can be
-slow, especially with multiple modalities, temporal neighbors, and geometry
-processing enabled, and is not intended as a drop-in, high-throughput training
-pipeline. As we are in the age of agentic coding, ask your favourite agent to 
-use this dataloader to understand the data and as a starting point for your own
-domain-specific loader: select the functions you need, disable unused features,
-and adapt preprocessing, caching, and data loading to your training workload.
+augmentation, batching, and optional ground-plane information. The loader 
+prioritizes functionality and clarity over speed.
 
 ## Repository Layout
 
@@ -68,10 +59,6 @@ then authenticate with a read-enabled token from that same approved account:
 hf auth login
 python -m download.download_from_hf --output-dir ./data
 ```
-
-A `401` or `403` response means authentication or dataset access is missing;
-logging in alone does not grant access to a gated dataset. A `429` response
-indicates Hugging Face rate limiting.
 
 To select batches, add `--repos` followed by any of `germany_batch1`,
 `germany_batch2`, `germany_batch3`, or `italy`. Add `--check` to compare local
@@ -128,42 +115,13 @@ Use `for_training` with `train.txt` for augmented training samples, or
 does not make the reference loader optimized for training throughput, as
 one would rarely needs all these modalities in training.
 
-The loader reads precomputed NPZ depth; it does not generate depth from raw
+The loader reads precomputed NPZ depth. It does not generate depth from raw
 LAZ files. Missing optional modalities are `None`. Existing archives with
 unsupported keys or invalid dimensions, invalid paths, and timestamps outside
 trajectory coverage raise errors instead of returning substitute data.
 
-`lidar_sparse` reads `sparse_ground_truth`; `depth_agg` normally projects
-`agg_depth/cam_1` camera-frame points. `depth_single` is only populated when
-the optional `single_depth/<camera>` export exists. It is not an alias for
-dense predictions.
-
-If you have your own depth folder, optionally pass
-`agg_depth_variant="my_depth"` or `--agg_depth_variant my_depth` in either
-preview script. Files are loaded from
-`<sequence>/my_depth/<camera>/<camera>_<timestamp>.npz` and populate
-`depth_agg`. Archives must contain a metric `depth` map in the original
-pinhole camera frame, or metric camera-frame `pts_cam` points. A selected
-center file is required: missing files raise `FileNotFoundError`.
-Missing maps are not synthesized or replaced with other predictions.
-
-At sequence boundaries, unavailable neighbor offsets are omitted from both
-`frames` and `rel_poses_to_center`. Every returned neighbor has a pose. Collation retains sample alignment; mixed present and absent fields remain lists. An empty/all-`None` batch raises an error.
-Missing stereo pairs are reported by a warning and `item["stereo"] is `None`.
-Insufficient training sparse supervision raises an error; samples are not
-silently dropped.
-
-Image flips preserve physical camera coordinates and all camera/world poses.
-The reflected intrinsics have negative `K[0, 0]`; backprojection must use the
-returned signed intrinsics, not their absolute values. Stereo rectification
-metadata describes the original calibration, not the augmented images.
-Color/crop/flip parameters are synchronized within each sample using a local
-seed stream without changing the caller's Python or Torch RNG state. For
-reproducible multiworker loading, also seed the DataLoader's generator.
-
-Augmented training is intended for depth learning. Bounding-box labels are
-omitted when geometric augmentations are enabled; detection-label augmentation is not
-implemented.
+`lidar_sparse` reads `sparse_ground_truth`, which are the raw lidar,
+ `depth_agg` normally projects `agg_depth/cam_1` camera-frame points.
 
 ### Ground Plane
 
